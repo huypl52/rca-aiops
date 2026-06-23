@@ -1,0 +1,430 @@
+"""compiled — §3.5 compiled-graph ASSEMBLY + CompiledGraphRunner + EXR plug (Story 3.5 — AD-2 / FR-4 / FR-5 / FR-7 / NFR-Determinism).
+
+This is the **compile-time DSL assembler** + the concrete entry-contract runner. It wires the FULL
+8-node §3.5 PE-R topology ONCE (immutable per process — AD-2) and provides the runner services call
+via the ``GraphRunner`` PORT (``graph/runner.py``). The dispatcher (``services/dispatch.py``) is
+UNCHANGED — it already depends on the PORT; 3.5 plugs ``CompiledGraphRunner`` WITHOUT touching it
+(the AC2 seam the leader DEEP-reviews).
+
+**3.5 = the ASSEMBLY MECHANISM + the EXR node-wiring + the runner plug. It is NOT the full runtime.**
+Of the 8 §3.5 nodes, only **5 have real content** at this point: ICB (1-3), PBR (3-1), HYP (3-2 +
+3-4 fuzzy-aware planner), VAL (3-3), EXR (3.5 — node-wiring over the 2-3 router). The remaining 3 —
+ENV (evidence_normalizer = 4-2), REF (reflector = 4-3), WRT (rca_writer = 5-1) — DO NOT EXIST yet.
+The EDGES are wired NOW (the contract-critical part); only the 3 deferred nodes' CONTENT is stubbed
+(§DEFER). 4.x/5-1 swap stub→real node via the SAME ``build_compiled_graph`` factory param — edges
+NEVER re-wire. This is the SAME lock-the-MECHANISM / defer-CONTENT discipline as 3.4.
+
+ANTI-DRIFT (do NOT build these here — they steal Epic 4/5 work):
+  - **ENV/REF/WRT real node content** (4-2/4-3/5-1) → DI-default deterministic STUBS (§DEFER). The
+    stubs are NODES injected into the SAME builder; swapping them does not touch the wiring.
+  - **Hypothesis-ADVANCE on replan** (try the next untried hypothesis) → REF 4-3. The POC-default
+    promotion re-promotes the SAME top-priority plan (deterministic); a VAL-rejected plan re-rejects
+    → bounded by ``max_iterations`` (carry-forward 1-A4). Honest degenerate loop; advance = 4.3.
+  - **partial "chưa đủ" REPORT content** → REF 4-3 / WRT 5-1. On max-iter the runner returns registry
+    ``status="failed"`` (lifecycle); the "chưa đủ" report framing is DEFERRED.
+  - **No LangGraph checkpointer** → cross-restart durability (SqliteSaver, AD-11) = Story 7-4.
+
+ONE-WAY (AD-1 / gate #2): module-level imports are ``graph.state`` + ``graph.runner`` (same layer) +
+``langgraph`` (3rd-party) + stdlib ONLY. This module does NOT import ``tools`` at module level — the
+BUILDER receives the EXR node via DI; only ``build_default_compiled_runner`` (the composition root)
+lazily imports ``tools`` to assemble the real stack (graph→tools FORWARD — LEGAL). NEVER
+``routers``/``services``/``adapters``. lint-imports: 1 contract kept / 0 broken.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Hashable, Mapping
+from functools import lru_cache
+from typing import cast
+
+from langgraph.errors import GraphRecursionError
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from graph.runner import GraphRunner, GraphRunnerResult, _snapshot_from_state
+from graph.state import InvestigationState, JsonValue, create_initial_state
+
+# ONE-WAY (AD-1 / gate #2): graph.state + graph.runner (same layer) + langgraph (3rd-party) + stdlib
+# ONLY at module level. NO tools/routers/services/adapters — the builder takes the EXR node via DI;
+# only build_default_compiled_runner (composition root) lazily imports tools.
+
+# ---------------------------------------------------------------------------
+# §3.5 node names (the EXACT 8-node topology — wiring locked here)
+# ---------------------------------------------------------------------------
+N_ICB = "incident_context_builder"
+N_PBR = "preplanning_playbook_retriever"
+N_HYP = "hypothesis_planner"
+N_VAL = "plan_validator"
+N_EXR = "executor_router"
+N_ENV = "evidence_normalizer"
+N_REF = "reflector"
+N_WRT = "rca_writer"
+
+# LOCKED next_action routing vocabulary (ARCHITECTURE-SPINE.md:95). VAL uses {proceed, replan};
+# REF uses {gather_more, replan, write}. An unknown value routes to a SAFE deterministic default
+# (VAL→replan→HYP; REF→write→WRT) — never crashes.
+NA_PROCEED = "proceed"
+NA_REPLAN = "replan"
+NA_GATHER_MORE = "gather_more"
+NA_WRITE = "write"
+
+# Deterministic multiplier mapping the dispatcher lifetime cap ``max_iterations`` (FR-7, PE-R loop
+# iterations) to LangGraph's ``recursion_limit`` (node supersteps). A full PE-R loop iteration visits
+# at most ~6 distinct nodes (HYP→VAL→EXR→ENV→REF→back-to-HYP); 8 is a conservative ceiling (the
+# one-time ICB/PBR prefix is amortized across iterations). This GUARANTEES the loop is BOUNDED — no
+# infinite loop is possible — and exceed → ``status="failed"`` (carry-forward 1-A4). The number is a
+# POC choice (deterministic + sane); tuning is deferred.
+_NODES_PER_ITERATION: int = 8
+
+
+# ---------------------------------------------------------------------------
+# §DEFER — deterministic DI-default stubs for ENV / REF / WRT (real node in 4.x/5-1)
+#
+# Each is a pure deterministic node ``(state) -> partial dict``. They are injected as the DEFAULTS of
+# ``build_compiled_graph``'s optional params; 4.x/5-1 swap stub→real via the SAME param (edges never
+# re-wire). These are PLACEHOLDERS, NOT design decisions — the real nodes own their behavior.
+# ---------------------------------------------------------------------------
+
+
+def _evidence_normalizer_stub(state: InvestigationState) -> dict[str, JsonValue]:
+    """DEFERRED — real evidence_normalizer is Story 4-2.
+
+    Pure identity pass-through. The real node normalizes ``tool_calls`` raw → Evidence 9-field
+    (AD-6). The stub emits NO keys (evidence stays empty in the POC; snapshot ``evidence_count=0``).
+    Deterministic (AD-12).
+    """
+    del state
+    return {}
+
+
+def _reflector_stub(state: InvestigationState) -> dict[str, JsonValue]:
+    """DEFERRED — real reflector is Story 4-3.
+
+    Deterministic "route to WRT": returns ``next_action="write"`` so the REF→WRT edge is exercised.
+    The real node does floor_check (AD-12 rule-sàn) + LLM-ceiling (AD-7) + gather_more/replan/write
+    routing + max-iter→partial. The stub's "always write" is a deterministic POC default, NOT a
+    routing design (4-3 owns routing). The REF→HYP loop-back edge is WIRED + exercisable via a test
+    that injects a looping REF. Deterministic (AD-12).
+    """
+    del state
+    return {"next_action": NA_WRITE}
+
+
+def _rca_writer_stub(state: InvestigationState) -> dict[str, JsonValue]:
+    """DEFERRED — real rca_writer is Story 5-1.
+
+    Minimal: ``report=None`` (report stays None until 5-1). The real node emits the RCA report
+    (FR-9, evidence-sourced, no remediation). Deterministic (AD-12).
+    """
+    del state
+    return {"report": None}
+
+
+# ---------------------------------------------------------------------------
+# §2.2 — plan-promotion wrapper (graph composition, NOT a new node)
+#
+# 3-3's docstring delegates "which hypothesis's plan is promoted to state.plan" to graph wiring
+# (3.5). This wrapper composes over a 3-2 planner node: it calls the planner → takes its
+# {"hypotheses": [...]} → ALSO sets state.plan = the top-priority hypothesis's plan (deterministic:
+# lowest ``priority`` value first; stable tie-break by ``id`` H01..). The wrapped function IS the HYP
+# node — the graph still has EXACTLY 8 §3.5 nodes (NO 9th "selector" node).
+#
+# Hypothesis-ADVANCE on replan is REF (4-3) — DEFERRED. The POC-default promotion always re-promotes
+# the top-priority plan; a VAL-rejected plan re-rejects → bounded by max_iterations (1-A4).
+# ---------------------------------------------------------------------------
+
+# Sort missing/non-numeric priority LAST so a well-formed hypothesis always wins the promotion.
+_PRIORITY_SENTINEL: int = 10**9
+
+
+def _promotion_sort_key(hypothesis: Mapping[str, object]) -> tuple[int | float, str]:
+    """Deterministic sort key for plan promotion: (priority ASC, id ASC).
+
+    Lowest ``priority`` value first (priority 1 outranks 2); stable tie-break by ``id`` (``H01`` <
+    ``H02`` < ...). Missing / non-numeric ``priority`` sorts last (sentinel); missing / non-str
+    ``id`` sorts as ``""``. Deterministic (AD-12).
+    """
+    priority_value = hypothesis.get("priority")
+    priority: int | float = (
+        priority_value if isinstance(priority_value, int | float) else _PRIORITY_SENTINEL
+    )
+    id_value = hypothesis.get("id")
+    id_str = id_value if isinstance(id_value, str) else ""
+    return (priority, id_str)
+
+
+def build_plan_promoting_planner(
+    planner: Callable[[InvestigationState], dict[str, JsonValue]],
+) -> Callable[[InvestigationState], dict[str, JsonValue]]:
+    """Wrap a 3-2 hypothesis_planner node so it ALSO promotes the top-priority plan to ``state.plan``.
+
+    Returns a node that calls ``planner(state)`` (→ ``{"hypotheses": [...]}``) and, when there is a
+    top-priority hypothesis carrying a ``plan`` dict, returns ``{**planner_result, "plan": <top plan>}``.
+    Empty / malformed hypotheses → no ``plan`` set (``state.plan`` stays as-is/None → VAL replans).
+    NEVER raises (Constraint 5): an injected planner that raises is folded to ``{}`` (no hypotheses,
+    no plan → VAL replans, bounded by max_iterations).
+
+    This is graph COMPOSITION over 3.2 — the SAME reuse discipline 3.4 applied (call 3.2's planner,
+    add a deterministic promotion). It is NOT a new §3.5 node (the wrapped function IS HYP).
+    """
+
+    def _hypothesis_planner_with_promotion(state: InvestigationState) -> dict[str, JsonValue]:
+        try:
+            partial = planner(state)
+        except Exception:  # noqa: BLE001 — injected planner raised → graceful degrade (never raises)
+            return {}
+        if not isinstance(partial, dict):
+            return {}
+        out: dict[str, JsonValue] = dict(partial)
+        hypotheses = out.get("hypotheses")
+        if isinstance(hypotheses, list):
+            eligible = [h for h in hypotheses if isinstance(h, Mapping)]
+            if eligible:
+                top = min(eligible, key=_promotion_sort_key)
+                top_plan = top.get("plan")
+                if isinstance(top_plan, dict):
+                    out["plan"] = dict(top_plan)
+        return out
+
+    return _hypothesis_planner_with_promotion
+
+
+# ---------------------------------------------------------------------------
+# §2.3 — conditional-edge routing (deterministic; reads state.next_action)
+# ---------------------------------------------------------------------------
+
+
+def _route_from_plan_validator(state: InvestigationState) -> str:
+    """VAL routing key: ``proceed``→EXR, ``replan`` (and unknown)→HYP (safe replan)."""
+    return NA_PROCEED if state.get("next_action") == NA_PROCEED else NA_REPLAN
+
+
+def _route_from_reflector(state: InvestigationState) -> str:
+    """REF routing key: ``gather_more``/``replan``→HYP, ``write`` (and unknown)→WRT (safe terminal)."""
+    next_action = state.get("next_action")
+    if next_action in (NA_GATHER_MORE, NA_REPLAN):
+        return NA_REPLAN if next_action == NA_REPLAN else NA_GATHER_MORE
+    return NA_WRITE
+
+
+# The conditional-edge path maps (LOCKED next_action vocabulary → target node). Typed
+# ``dict[Hashable, str]`` to match LangGraph's ``add_conditional_edges`` path_map contract (the keys
+# are routing keys — here ``str`` — but the stub widens them to ``Hashable``).
+_VAL_PATHS: dict[Hashable, str] = {NA_PROCEED: N_EXR, NA_REPLAN: N_HYP}
+_REF_PATHS: dict[Hashable, str] = {
+    NA_GATHER_MORE: N_HYP,
+    NA_REPLAN: N_HYP,
+    NA_WRITE: N_WRT,
+}
+
+
+@lru_cache(maxsize=1)
+def build_compiled_graph(
+    *,
+    incident_context_builder: Callable[[InvestigationState], dict[str, JsonValue]],
+    preplanning_playbook_retriever: Callable[[InvestigationState], dict[str, JsonValue]],
+    hypothesis_planner: Callable[[InvestigationState], dict[str, JsonValue]],
+    plan_validator: Callable[[InvestigationState], dict[str, JsonValue]],
+    executor_router: Callable[[InvestigationState], dict[str, JsonValue]],
+    evidence_normalizer: Callable[
+        [InvestigationState], dict[str, JsonValue]
+    ] = _evidence_normalizer_stub,
+    reflector: Callable[[InvestigationState], dict[str, JsonValue]] = _reflector_stub,
+    rca_writer: Callable[[InvestigationState], dict[str, JsonValue]] = _rca_writer_stub,
+) -> CompiledStateGraph:  # type: ignore[type-arg]  # langgraph generic params unused here (stub)
+    """DI-seam factory: compile the FULL 8-node §3.5 PE-R graph ONCE (immutable per process — AD-2).
+
+    The 5 available nodes are REQUIRED (real content: ICB 1-3, PBR 3-1, HYP 3-2/3-4, VAL 3-3, EXR
+    3.5). ENV/REF/WRT are OPTIONAL, defaulting to the deterministic DI-default stubs (4.x/5-1 swap
+    stub→real via this same param). Returns the compiled LangGraph
+    (``StateGraph(InvestigationState).compile()``).
+
+    Topology (spec ARCHITECTURE-SPINE.md §3.5 — wired NOW; the 3 deferred nodes are stubs)::
+
+        START → ICB → PBR → HYP → VAL ──{ proceed → EXR → ENV → REF ──{ gather_more/replan → HYP,
+                                  └──{ replan → HYP }                          └──{ write → WRT → END }
+
+    AD-2 immutable-once: memoized via ``lru_cache(maxsize=1)``. Two calls with the SAME node objects
+    return the SAME compiled-graph object (identity); ``CompiledGraphRunner.run()`` reuses it (no
+    per-run recompile). Calling with DIFFERENT nodes rebuilds (correct — a different injected graph).
+
+    Args:
+        incident_context_builder: the ICB node (1-3).
+        preplanning_playbook_retriever: the PBR node (3-1).
+        hypothesis_planner: the HYP node — pass the plan-PROMOTION-wrapped 3-2 planner
+            (:func:`build_plan_promoting_planner`) so ``state.plan`` is populated; a bare 3-2 planner
+            leaves ``state.plan`` empty → VAL replans (degenerate but bounded).
+        plan_validator: the VAL node (3-3).
+        executor_router: the EXR node (3.5 — :func:`build_executor_router_node`).
+        evidence_normalizer: the ENV node (default the 4-2 DEFERRED stub).
+        reflector: the REF node (default the 4-3 DEFERRED stub).
+        rca_writer: the WRT node (default the 5-1 DEFERRED stub).
+
+    Returns:
+        the compiled ``StateGraph(InvestigationState)`` (a ``CompiledStateGraph``), immutable per
+        process.
+    """
+    graph = StateGraph(InvestigationState)
+    # NOTE: ``add_node`` carries a deliberate ``# type: ignore[call-overload]`` on EVERY call. The
+    # langgraph 1.2.6 stubs type a node as ``_Node[NodeInputT]`` and, under strict mypy, refuse a
+    # plain ``Callable[[InvestigationState], dict[str, JsonValue]]`` (recursive-alias / partial-update
+    # invariance). This is a STUB limitation only — every node is a valid LangGraph node and the full
+    # topology runs end-to-end (tests/test_compiled_graph.py exercises the happy path). Re-checked each
+    # story; do NOT "fix" by re-typing the nodes to langgraph internals.
+    graph.add_node(N_ICB, incident_context_builder)  # type: ignore[call-overload]
+    graph.add_node(N_PBR, preplanning_playbook_retriever)  # type: ignore[call-overload]
+    graph.add_node(N_HYP, hypothesis_planner)  # type: ignore[call-overload]
+    graph.add_node(N_VAL, plan_validator)  # type: ignore[call-overload]
+    graph.add_node(N_EXR, executor_router)  # type: ignore[call-overload]
+    graph.add_node(N_ENV, evidence_normalizer)  # type: ignore[call-overload]
+    graph.add_node(N_REF, reflector)  # type: ignore[call-overload]
+    graph.add_node(N_WRT, rca_writer)  # type: ignore[call-overload]
+
+    # Linear prefix: START → ICB → PBR → HYP → VAL.
+    graph.add_edge(START, N_ICB)
+    graph.add_edge(N_ICB, N_PBR)
+    graph.add_edge(N_PBR, N_HYP)
+    graph.add_edge(N_HYP, N_VAL)
+
+    # VAL conditional: proceed → EXR; replan (and unknown) → HYP (loop-back, bounded by max_iterations).
+    graph.add_conditional_edges(N_VAL, _route_from_plan_validator, _VAL_PATHS)
+
+    # EXR → ENV → REF (plain edges; EXR needs no routing signal).
+    graph.add_edge(N_EXR, N_ENV)
+    graph.add_edge(N_ENV, N_REF)
+
+    # REF conditional: gather_more/replan → HYP (loop-back); write (and unknown) → WRT (terminal).
+    graph.add_conditional_edges(N_REF, _route_from_reflector, _REF_PATHS)
+
+    # WRT → END.
+    graph.add_edge(N_WRT, END)
+
+    return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# §2.4 — CompiledGraphRunner (concrete entry-contract runner; AC3 + carry-forward 1-A4)
+# ---------------------------------------------------------------------------
+
+
+class CompiledGraphRunner(GraphRunner):
+    """Concrete ``GraphRunner`` running the compiled §3.5 graph (AC2 seam + AC3 entry contract).
+
+    Implements the ``GraphRunner`` Protocol (``graph/runner.py``): the dispatcher calls
+    ``run(trigger, investigation_id, max_iterations)``; this builds fresh state, runs the compiled
+    graph via ``.ainvoke``, and projects a JSON-safe snapshot. The dispatcher is UNCHANGED — it
+    depends on the PORT only; this runner plugs via ``Dispatcher(runner=...)`` (AC2).
+
+    Carry-forward 1-A4 (HARD): ``max_iterations`` is honored — the loop is BOUNDED (no infinite loop
+    is possible). ``max_iterations`` maps to LangGraph's ``recursion_limit`` via a deterministic
+    multiplier (:data:`_NODES_PER_ITERATION`); exceeding it raises ``GraphRecursionError``, caught
+    here → ``status="failed"`` (lifecycle). The partial "chưa đủ" REPORT is REF/WRT — DEFERRED.
+
+    ``report`` is ``None`` until the rca_writer node (5-1); the WRT stub emits ``{"report": None}``.
+
+    NOTE on the POC default: with the POC-default nodes (3-2 rule-based plans lack the
+    tool/query/timestamp_range trio VAL requires), VAL replans indefinitely → the bound fires →
+    ``status="failed"``. That is the HONEST degenerate state of the POC (real convergence needs the
+    reflector + hypothesis-advance of Epic 4). The MECHANISM (compile-once, bounded run, entry
+    contract) is complete; convergence CONTENT is deferred. Production wiring as the default
+    dispatcher is therefore deferred until Epic 4/5 — the dispatcher module default
+    (``ContextBuilderRunner``) is UNCHANGED (Story 1-4 tests stay green).
+    """
+
+    def __init__(
+        self,
+        graph: CompiledStateGraph,  # type: ignore[type-arg]  # langgraph generic params unused here
+        *,
+        nodes_per_iteration: int = _NODES_PER_ITERATION,
+    ) -> None:
+        self._graph = graph
+        self._nodes_per_iteration = nodes_per_iteration
+
+    async def run(
+        self,
+        trigger: dict[str, JsonValue],
+        investigation_id: str,
+        max_iterations: int,
+    ) -> GraphRunnerResult:
+        """Run the compiled graph for ``investigation_id`` to terminal (entry contract — AD-2)."""
+        # The graph layer owns state (AD-2): the dispatcher never touches internals. Fresh state per
+        # run (no LangGraph checkpointer — cross-restart durability = Story 7-4).
+        state = create_initial_state(incident_id=investigation_id, trigger=dict(trigger))
+        recursion_limit = max(max_iterations, 1) * self._nodes_per_iteration
+
+        try:
+            final = await self._graph.ainvoke(state, config={"recursion_limit": recursion_limit})
+        except GraphRecursionError:
+            # 1-A4: max_iterations exceeded → BOUNDED → lifecycle status="failed". The partial
+            # "chưa đủ" REPORT framing is REF/WRT (DEFERRED to 4.x/5-1) — not emitted here.
+            return GraphRunnerResult(
+                status="failed",
+                state_snapshot=_snapshot_from_state(state),
+                report=None,
+            )
+
+        final_state: InvestigationState = cast(InvestigationState, final)
+        report_value = final_state.get("report")
+        report: dict[str, JsonValue] | None = (
+            report_value if isinstance(report_value, dict) else None
+        )
+        return GraphRunnerResult(
+            status="success",
+            state_snapshot=_snapshot_from_state(final_state),
+            report=report,
+        )
+
+
+# ---------------------------------------------------------------------------
+# §2.6 — composition-root factory (AC2 seam). tools is imported LAZILY here so the module surface
+# (build_compiled_graph + CompiledGraphRunner + stubs) stays tools-free (§2.7: the BUILDER receives
+# the EXR node via DI; only this factory wires tools — graph→tools FORWARD, LEGAL).
+# ---------------------------------------------------------------------------
+
+
+def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRunner:
+    """Composition root: assemble the POC-default compiled-graph runner.
+
+    Builds the registry (2-1) + stub adapter (2-1) + router (2-3) + the 5 real nodes + the EXR node
+    + the plan-promotion-wrapped HYP, compiles the graph (ONCE — AD-2) with the DI-default ENV/REF/WRT
+    stubs, and returns a ready ``CompiledGraphRunner``. Deterministic + dependency-light for tests.
+
+    Production wiring (swapping this in as the default dispatcher) is applied at the composition root
+    (``set_default_dispatcher(Dispatcher(runner=build_default_compiled_runner(), ...))``) — it is
+    DEFERRED until Epic 4/5 make the graph converge (the dispatcher module default stays
+    ``ContextBuilderRunner``; Story 1-4 tests stay green).
+    """
+    # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.nodes same layer). Kept inside this
+    # composition root so build_compiled_graph / CompiledGraphRunner / stubs stay tools-free (§2.7).
+    from graph.nodes.executor_router import build_executor_router_node
+    from graph.nodes.hypothesis_planner import build_hypothesis_planner
+    from graph.nodes.incident_context_builder import incident_context_builder
+    from graph.nodes.plan_validator import build_plan_validator
+    from graph.nodes.preplanning_playbook_retriever import build_preplanning_playbook_retriever
+    from tools.port import StubReadOnlyAdapter
+    from tools.registry import build_default_registry
+    from tools.router import ExecutorRouter
+
+    adapter = StubReadOnlyAdapter()
+    registry = build_default_registry()
+    router = ExecutorRouter(registry, adapter)
+
+    hypothesis_planner = build_plan_promoting_planner(
+        build_hypothesis_planner(max_hypotheses=max_hypotheses)
+    )
+    graph = build_compiled_graph(
+        incident_context_builder=incident_context_builder,
+        preplanning_playbook_retriever=build_preplanning_playbook_retriever(adapter),
+        hypothesis_planner=hypothesis_planner,
+        plan_validator=build_plan_validator(),
+        executor_router=build_executor_router_node(router=router),
+    )
+    return CompiledGraphRunner(graph)
+
+
+__all__ = [
+    "CompiledGraphRunner",
+    "build_compiled_graph",
+    "build_default_compiled_runner",
+    "build_plan_promoting_planner",
+]
