@@ -11,6 +11,10 @@ hypothesis_planner, plan_validator, executor_router, evidence_normalizer,
 reflector, rca_writer) land in their respective stories.
 """
 
+from graph.nodes.fuzzy_explore import (
+    build_fuzzy_aware_hypothesis_planner,
+    detect_fuzzy,
+)
 from graph.nodes.hypothesis_planner import (
     HypothesisSource,
     build_hypothesis_planner,
@@ -26,9 +30,11 @@ from graph.nodes.preplanning_playbook_retriever import (
 
 __all__ = [
     "HypothesisSource",
+    "build_fuzzy_aware_hypothesis_planner",
     "build_hypothesis_planner",
     "build_incident_context",
     "build_plan_validator",
     "build_preplanning_playbook_retriever",
+    "detect_fuzzy",
     "incident_context_builder",
 ]
