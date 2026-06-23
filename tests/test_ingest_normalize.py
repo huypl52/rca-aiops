@@ -1,11 +1,16 @@
-"""Story 1-1 — ingest endpoints + normalize → IncidentTrigger (AC1-AC8).
+"""Story 1-1 ingest/normalize + Story 1-2 router upgrade (200 → 202 + investigation_id).
 
-Covers: 3 endpoints exact path + source mapping (AC1), normalize → reused
-IncidentTrigger 18-field + enums (AC2), reject-on-missing no-guess/no-partial
-(AC3), no-collapse canonical derived from §3.7 (AC4), raw_payload inline +
-raw_payload_ref None (AC5), validate-on-ingress rejects bad enum/type (AC6),
-gate #2 one-way routers→services→models (AC7), scope kept — echo IncidentTrigger
-200, no 202/grouping/dispatch/state (AC8).
+Covers: 3 endpoints exact path + source mapping (1-1 AC1), normalize → reused
+IncidentTrigger 18-field + enums (1-1 AC2, SERVICE-level — unchanged), reject-on-missing
+no-guess/no-partial (1-1 AC3), no-collapse canonical derived from §3.7 (1-1 AC4),
+raw_payload inline + raw_payload_ref None (1-1 AC5), validate-on-ingress rejects bad
+enum/type (1-1 AC6), gate #2 one-way routers→services→models (1-1 AC7), and the Story
+1-2 router-level upgrade: successful ingest now returns `202 Accepted +
+{investigation_id}` (grouping WRAPS the normalizer). The service-level normalize
+behavior (IncidentTrigger 18-field, reject-on-missing) is UNCHANGED; only the
+router-level SUCCESS assertion moved 200→202. Grouping-specific ACs (idempotent
+trigger_id, H3 1:1, incident_id=investigation_id, non-blocking) live in
+`tests/test_grouping.py`.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from pydantic import ValidationError
 
 from models import IncidentTrigger, Severity, SignalType, TriggerSource
 from routers.app import create_app
+from services.grouping import reset_registry
 from services.normalize import (
     BENCHMARK_CANONICAL_TRIGGERS,
     MissingFieldError,
@@ -93,36 +99,62 @@ K8S_CRASHLOOP: dict[str, Any] = {
     "labels": {"service": "payment-service", "scenario": "crashloop", "severity": "critical"},
 }
 
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     return TestClient(create_app())
 
 
+@pytest.fixture(autouse=True)
+def _isolate_investigation_registry() -> Any:
+    """Clear the in-process grouping registry between tests (Story 1-2 idempotency store).
+
+    Successful ingest now opens an investigation via the shared module-level registry.
+    Without this reset, a trigger_id posted in one test would be seen as a re-send in a
+    later test, leaking idempotency state across tests.
+    """
+    reset_registry()
+    yield
+    reset_registry()
+
+
+def _is_uuid_v4(value: str) -> bool:
+    """True if `value` is a canonical UUID v4 string (investigation_id format, Story 1-2)."""
+    import re
+
+    return (
+        re.match(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            value,
+        )
+        is not None
+    )
+
+
 # ---------------------------------------------------------------------------
-# AC1 + AC8 — 3 endpoints exact path, source decided by path, echo IncidentTrigger (200).
+# 1-1 AC1 + 1-2 router upgrade — 3 endpoints exact path; success → 202 + investigation_id.
+# (source/signal mapping is verified SERVICE-level below + in test_grouping.py.)
 # ---------------------------------------------------------------------------
 
 
-def test_prometheus_endpoint_normalizes_to_incident_trigger(client: TestClient) -> None:
+def test_prometheus_endpoint_returns_202_investigation_id(client: TestClient) -> None:
     resp = client.post("/api/alerts/prometheus", json=PROM_DEP_TIMEOUT)
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text  # 1-2: 200 → 202 (grouping wrap)
     body = resp.json()
-    assert body["source"] == "prometheus_alertmanager"
-    assert body["signal_type"] == "metric"
+    assert set(body.keys()) == {"investigation_id"}
+    assert _is_uuid_v4(body["investigation_id"])
 
 
-def test_grafana_endpoint_normalizes_to_incident_trigger(client: TestClient) -> None:
+def test_grafana_endpoint_returns_202_investigation_id(client: TestClient) -> None:
     resp = client.post("/api/alerts/grafana", json=GRAFANA_DNS)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["source"] == "grafana_alerting_loki"
-    assert resp.json()["signal_type"] == "log"
+    assert resp.status_code == 202, resp.text
+    assert set(resp.json().keys()) == {"investigation_id"}
 
 
-def test_kubernetes_endpoint_normalizes_to_incident_trigger(client: TestClient) -> None:
+def test_kubernetes_endpoint_returns_202_investigation_id(client: TestClient) -> None:
     resp = client.post("/api/events/kubernetes", json=K8S_CRASHLOOP)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["source"] == "kubernetes_event"
-    assert resp.json()["signal_type"] == "kubernetes_event"
+    assert resp.status_code == 202, resp.text
+    assert set(resp.json().keys()) == {"investigation_id"}
 
 
 def test_unknown_path_is_not_an_ingest_endpoint(client: TestClient) -> None:
@@ -173,7 +205,7 @@ def test_normalize_raises_missing_field_before_constructing() -> None:
         normalize_prometheus(raw)
 
 
-def test_missing_required_field_returns_422_envelope_no_200(client: TestClient) -> None:
+def test_missing_required_field_returns_422_envelope_no_202(client: TestClient) -> None:
     raw: dict[str, Any] = {**PROM_DEP_TIMEOUT}
     raw.pop("fingerprint", None)  # trigger_id source removed
     resp = client.post("/api/alerts/prometheus", json=raw)
@@ -324,13 +356,17 @@ def test_routers_module_does_not_import_forbidden_layers() -> None:
 
 def test_source_is_decided_by_path_not_spoofable_from_body(client: TestClient) -> None:
     # AC1 / T4.5: the endpoint path fixes the source — a spoofed `source`/signal in
-    # the body must be IGNORED (we never trust the raw body for source).
+    # the body must be IGNORED (we never trust the raw body for source). At the router
+    # level the success body is now {investigation_id} (1-2), so the source-correctness
+    # itself is asserted service-level (`test_normalize_prometheus_yields_full_incident_trigger`);
+    # here we assert the spoofed body still ingests cleanly (202) — i.e. spoofed fields
+    # do not break normalization and do not leak into the response.
     raw = {**PROM_DEP_TIMEOUT, "source": "kubernetes_event", "signal_type": "log"}
     resp = client.post("/api/alerts/prometheus", json=raw)
-    assert resp.status_code == 200
+    assert resp.status_code == 202, resp.text
     body = resp.json()
-    assert body["source"] == "prometheus_alertmanager"
-    assert body["signal_type"] == "metric"
+    assert set(body.keys()) == {"investigation_id"}  # no source/signal echoed
+    assert "source" not in body and "signal_type" not in body
 
 
 def test_contradictory_scenario_and_alert_rejected_not_collapsed() -> None:
