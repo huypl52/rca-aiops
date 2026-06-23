@@ -6,10 +6,10 @@ Pydantic lives only at the port) and builds the initial investigation context:
 
     context = {
         "service":        trigger["service"],
-        "namespace":      trigger["namespace"] or "demo",   # default demo (§3.4)
-        "time_window":    {"start": started_at, "end": ends_at or None},
-        "labels":         trigger["labels"],
-        "topology_seed":  {"services": [*affected_services]},  # non-inventing seed
+        "namespace":      "demo" if namespace in (None, "") else namespace,  # Constrain #4: NO falsy/0 coercion
+        "time_window":    {"start": started_at, "end": ends_at},   # end=None when firing (deterministic, AD-12)
+        "labels":         labels if isinstance(labels, dict) else {},
+        "topology_seed":  {"services": [s for s in affected_services if isinstance(s, str)]},  # non-inventing seed
     }
 
 Contract locks (leader DEEP, first node writing the state spine — sets the

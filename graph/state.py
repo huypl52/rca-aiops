@@ -30,8 +30,9 @@ nodes never overwrite whole state (AD-4). All reducers are **pure** and
 Scope (Story 0.3): state definition + reducers + factory ONLY. This module does
 NOT compile the graph (`StateGraph(...).compile()` = Story 3-5), implement any
 of the 8 §3.5 nodes (Epic 1/3/4/5), or wire consumers (routers ingest = 1-1).
-One-way (AD-1): imports `models` (port) + `ci.contract_schema` (non-layer) +
-3rd-party/stdlib only — never `routers`/`services` (gate #2 KEPT).
+One-way (AD-1): imports STDLIB ONLY (`json` / `collections.abc` / `typing`) —
+never `models`/`routers`/`services`/`adapters`/`tools` (gate #2 KEPT; even more
+layer-pure than the contract minimum).
 """
 
 from __future__ import annotations
