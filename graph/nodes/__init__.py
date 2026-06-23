@@ -19,6 +19,7 @@ from graph.nodes.incident_context_builder import (
     build_incident_context,
     incident_context_builder,
 )
+from graph.nodes.plan_validator import build_plan_validator
 from graph.nodes.preplanning_playbook_retriever import (
     build_preplanning_playbook_retriever,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "HypothesisSource",
     "build_hypothesis_planner",
     "build_incident_context",
+    "build_plan_validator",
     "build_preplanning_playbook_retriever",
     "incident_context_builder",
 ]
