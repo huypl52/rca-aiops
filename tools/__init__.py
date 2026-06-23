@@ -23,12 +23,15 @@ from tools.port import (
     ToolExecutor,
 )
 from tools.registry import ReadOnlyRegistry, ReadOnlyViolation, build_default_registry
+from tools.router import DispatchResult, ExecutorRouter
 
 # Deterministic module-level registry: the 10 spec §3.6 tools, built once at import (AD-12).
 registry: ReadOnlyRegistry = build_default_registry()
 
 __all__ = [
     "EXECUTORS",
+    "DispatchResult",
+    "ExecutorRouter",
     "JsonValue",
     "ReadOnlyAdapterPort",
     "ReadOnlyRegistry",
