@@ -15,8 +15,12 @@ from graph.nodes.incident_context_builder import (
     build_incident_context,
     incident_context_builder,
 )
+from graph.nodes.preplanning_playbook_retriever import (
+    build_preplanning_playbook_retriever,
+)
 
 __all__ = [
     "build_incident_context",
+    "build_preplanning_playbook_retriever",
     "incident_context_builder",
 ]
