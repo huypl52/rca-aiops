@@ -16,13 +16,15 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from routers.ingest import router as ingest_router
+from routers.investigations import router as investigations_router
 from services.normalize import NormalizeError
 
 
 def create_app() -> FastAPI:
-    """Build the FastAPI app: ingest router + error-envelope handlers."""
+    """Build the FastAPI app: ingest router + read-store router + error-envelope handlers."""
     app = FastAPI(title="RCA AI Agent POC — ingest", version="0.1.0")
     app.include_router(ingest_router)
+    app.include_router(investigations_router)
 
     @app.exception_handler(NormalizeError)
     async def normalize_error_handler(_: Request, exc: NormalizeError) -> JSONResponse:

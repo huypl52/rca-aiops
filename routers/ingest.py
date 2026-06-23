@@ -5,22 +5,26 @@ Endpoints (exact paths, spec §3.4 table / epic line 229):
   - POST /api/alerts/grafana      → normalize_grafana     (source = grafana_alerting_loki)
   - POST /api/events/kubernetes   → normalize_kubernetes   (source = kubernetes_event)
 
-Flow (Story 1-2, FR-2 / AD-10): parse request → call the normalizer service (Story
-1-1, validates the raw payload into a typed `IncidentTrigger`, rejecting on missing /
-unknown-canonical / invalid field with the `{error, code, detail}` 422 envelope) →
-call the grouping service (Story 1-2, H3 1-trigger-1-investigation, idempotent on
-`trigger_id`, sets `incident_id = investigation_id`) → return `202 Accepted +
-{investigation_id}`.
+Flow (Story 1-2 + 1-4, FR-2 / AD-10): parse request → call the normalizer service
+(Story 1-1, validates the raw payload into a typed `IncidentTrigger`, rejecting on
+missing / unknown-canonical / invalid field with the `{error, code, detail}` 422
+envelope) → call the grouping service (Story 1-2, H3 1-trigger-1-investigation,
+idempotent on `trigger_id`, sets `incident_id = investigation_id`) → call the
+dispatch service (Story 1-4, `dispatch(investigation_id, trigger.model_dump())` —
+enqueues a NON-BLOCKING background `GraphRunner` task via the in-process
+dispatcher, AD-10 #2) → return `202 Accepted + {investigation_id}` IMMEDIATELY.
 
 AD-1 one-way: this router imports ONLY `services` + `models` — it MUST NOT import
 `graph` / `adapters` / `tools` (enforced by gate #2 import-linter). Router is thin:
 it never echoes the `IncidentTrigger` (that was Story 1-1's 200; the grouping layer
 upgrades it to 202 + investigation_id).
 
-Scope (locked 1-2 vs 1-4 vs 3-5): the handler returns 202 immediately — it does NOT
-await the graph, run a background worker, expose a read-store, or resume a checkpoint
-(those are Stories 1-4 / 3-5). Non-blocking is an async CONTRACT here, not an async
-mechanism.
+Scope (locked 1-4 vs 3-5): the handler returns 202 immediately — it does NOT await
+the investigation (the background task is fire-and-forget) NOR expose the read-store
+(`GET /api/investigations/{id}` lives in `routers/investigations.py`) NOR resume a
+checkpoint (in-process resume lives in `services/dispatch.py` `startup_scan()`).
+Non-blocking is now both an async CONTRACT (1-2) AND the async MECHANISM (1-4).
+The compiled graph itself = Story 3-5; 1-4 dispatches via the `GraphRunner` PORT.
 
 Each endpoint declares a Pydantic request schema (an open envelope — webhooks carry
 many source-specific fields). The canonical-contract validation lives in
@@ -35,6 +39,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
+from services.dispatch import dispatch
 from services.grouping import group
 from services.normalize import (
     normalize_grafana,
@@ -89,9 +94,11 @@ class InvestigationAccepted(BaseModel):
     status_code=202,
 )
 def ingest_prometheus(payload: PrometheusAlertPayload) -> InvestigationAccepted:
-    """Normalize a Prometheus alert → group (idempotent) → 202 + investigation_id."""
+    """Normalize a Prometheus alert → group (idempotent) → dispatch (non-blocking) → 202."""
     trigger = normalize_prometheus(payload.as_payload())
-    return InvestigationAccepted(investigation_id=group(trigger))
+    investigation_id = group(trigger)
+    dispatch(investigation_id, trigger.model_dump())
+    return InvestigationAccepted(investigation_id=investigation_id)
 
 
 @router.post(
@@ -100,9 +107,11 @@ def ingest_prometheus(payload: PrometheusAlertPayload) -> InvestigationAccepted:
     status_code=202,
 )
 def ingest_grafana(payload: GrafanaAlertPayload) -> InvestigationAccepted:
-    """Normalize a Grafana (Loki) alert → group (idempotent) → 202 + investigation_id."""
+    """Normalize a Grafana (Loki) alert → group (idempotent) → dispatch (non-blocking) → 202."""
     trigger = normalize_grafana(payload.as_payload())
-    return InvestigationAccepted(investigation_id=group(trigger))
+    investigation_id = group(trigger)
+    dispatch(investigation_id, trigger.model_dump())
+    return InvestigationAccepted(investigation_id=investigation_id)
 
 
 @router.post(
@@ -111,6 +120,8 @@ def ingest_grafana(payload: GrafanaAlertPayload) -> InvestigationAccepted:
     status_code=202,
 )
 def ingest_kubernetes(payload: KubernetesEventPayload) -> InvestigationAccepted:
-    """Normalize a Kubernetes Event → group (idempotent) → 202 + investigation_id."""
+    """Normalize a Kubernetes Event → group (idempotent) → dispatch (non-blocking) → 202."""
     trigger = normalize_kubernetes(payload.as_payload())
-    return InvestigationAccepted(investigation_id=group(trigger))
+    investigation_id = group(trigger)
+    dispatch(investigation_id, trigger.model_dump())
+    return InvestigationAccepted(investigation_id=investigation_id)
