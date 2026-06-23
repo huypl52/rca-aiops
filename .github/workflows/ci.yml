@@ -60,10 +60,12 @@ jobs:
       - name: "Gate #2: dependency-direction import-linter (HARD-FAIL)"
         run: uv run lint-imports
 
-      # Gate #3 — type-coherence 2-tier round-trip (AD-13 #3 / AD-9).
-      # PLACEHOLDER: filled by Story 0.3 (InvestigationState + reducer wiring).
-      - name: "Gate #3: type-coherence round-trip [PLACEHOLDER — Story 0.3]"
-        run: echo "TODO(Story 0.3): InvestigationState TypedDict ⊆ Pydantic fields + serialize→deserialize round-trip (AD-9)"
+      # Gate #3 — type-coherence 2-tier round-trip (AD-13 #3 / AD-9). HARD-FAIL, no opt-out.
+      # Story 0.3: asserts InvestigationState (graph TypedDict) shape ⊆ Pydantic port contract
+      # (ci.contract_schema — spec-derived, NOT the TypedDict) + LangGraph built-in
+      # serialize→deserialize round-trip deep-equal + JSON-safe invariant (json.dumps).
+      - name: "Gate #3: type-coherence round-trip (HARD-FAIL)"
+        run: uv run pytest tests/ci/test_gate3_type_coherence.py -v
 
       # Gate #4 — floor determinism (AD-13 #4 / AD-12).
       # PLACEHOLDER: filled by Epic 4 (floor registry + floor_check pure-function test).

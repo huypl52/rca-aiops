@@ -8,7 +8,7 @@ blocks merge, no opt-out, no `continue-on-error`.
 | --- | --- | --- | --- | --- | --- |
 | 1 | Read-only registry (no write/exec/patch/...) | AD-3 (BLOCKER) | **SKELETON WIRED** ✓ | Story 2.1 (real registry) | `ci/gate1_readonly_registry.py` |
 | 2 | Dependency-direction one-way (no back-edge/circular) | AD-1, AD-2 | **WIRED** ✓ | — (living contract) | `uv run lint-imports` |
-| 3 | Type-coherence 2-tier round-trip | AD-9 | placeholder | **Story 0.3** | `pytest` (InvestigationState ⊆ Pydantic + round-trip) |
+| 3 | Type-coherence 2-tier round-trip | AD-9 | **WIRED** ✓ | Story 0.3 | `pytest tests/ci/test_gate3_type_coherence.py` |
 | 4 | Floor determinism (pure-function + registry schema) | AD-12 | placeholder | **Epic 4** | `pytest` (floor_check) |
 | 5 | Contract schema preservation (18/9-field no drift) | AD-6 | **WIRED** ✓ | Story 0.2 | `pytest tests/ci/test_gate5_contract_schema.py` |
 | 6 | Benchmark determinism (11-scenario + calibration) | FR-10, AD-13 #6 | placeholder | **Epic 6** | `eval/` harness |
@@ -52,7 +52,34 @@ The Pydantic contract models MUST NOT drift from spec §3.4 (IncidentTrigger =
   invented field via `pydantic.create_model` (add), drops a field (remove), renames
   (drop+add) → assertion `AssertionError` each time (drift caught).
 
-## Gates #3, #4, #6 — placeholders (Story 0.1)
+## Gate #3 — type-coherence 2-tier round-trip (AD-13 #3 / AD-9)
+
+The `InvestigationState` TypedDict (graph layer) must stay type-coherent with the
+Pydantic port contract. Two assertions, BOTH must pass to merge (HARD-FAIL).
+
+- **Bind:** `uv run pytest tests/ci/test_gate3_type_coherence.py -v`.
+- **(a) Shape (2-tier AD-9):** nested `state.trigger` keys ⊆ IncidentTrigger port
+  field-set (18 §3.4 + `incident_id`) AND every `state.evidence` item keys ⊆ Evidence
+  port field-set (9 §3.6). Source-of-truth = `ci.contract_schema` (spec-derived, NOT
+  derived from the TypedDict — avoids a tautological drift gate, same lesson as gate #5).
+- **(b) Round-trip:** sample `InvestigationState` → `JsonPlusSerializer.dumps_typed` →
+  `loads_typed` → `assert ==` (deep equality). AD-9 "serializer = LangGraph built-in,
+  NO custom serializer". Covers list-dedupe, scalar replace, hypothesis upsert,
+  nested dict/list/None/scalars.
+- **JSON-safe invariant (AD-9 rule 1 "plain JSON-safe dicts"):** stdlib `json.dumps(state)`
+  must succeed — NOT JsonPlusSerializer (which, being msgpack+extensions, round-trips
+  `datetime`/`set` and would NOT trip on them). `json.dumps` is the guard that rejects the
+  non-JSON-safe values we actually care about (`datetime`/`set`/custom objects). (Caveat:
+  `json.dumps` does NOT reject >64-bit ints, which JsonPlusSerializer *does* — so the two
+  are not a strict superset relation; for the AD-9 invariant the `datetime`/`set` axis is
+  the operative one, and `json.dumps` enforces it.)
+- **Negative (FAIL proven):** inject `datetime`/`set` → `json.dumps` raises `TypeError`;
+  inject shape-drift (trigger/evidence key outside port contract) → (a) raises
+  `AssertionError`; `schema_version` mismatch → `assert_schema_version` raises `ValueError`.
+- **13-key spine:** gate also asserts `InvestigationState.__annotations__` == exactly the
+  13 AD-9 top-level keys (no invented/missing key).
+
+## Gates #4, #6 — placeholders (Story 0.1)
 
 Remaining placeholder steps in `.github/workflows/ci.yml` with `TODO(<epic>)` trace.
 Each is filled when the corresponding artifact exists. They are NOT silently passing
