@@ -27,16 +27,20 @@ LOCKED mechanism (do NOT redesign):
   2. **Read-only check — REUSE ``ci.denyset``; do NOT reinvent.** Imports
      ``from ci.denyset import WRITE_PATTERNS, WRITE_VERBS``. Scans the plan's string
      content for:
-       - **WRITE_VERBS** — exact-token, case-insensitive match over every string leaf
-         (see :func:`_verb_matches`). Tokens are alphanumeric runs split on
-         non-alphanumeric chars; an exact-set membership avoids false positives
-         (``exec`` does NOT match inside ``execute_metric`` / ``process_exec_summary``)
-         while STILL catching snake-case forms (``restart_pods`` → token ``restart``
-         → MATCH; note regex ``\\b`` would WRONGLY miss these because ``\\w`` includes
-         ``_``). Covers §3.8's 7 forbidden + catch-all ``write``.
-       - **WRITE_PATTERNS** — ``re.Pattern.search`` over the JSON-serialized plan +
-         each leaf (catches command-string forms: ``kubectl debug/exec/patch``,
-         ``rollout restart/undo``, ``helm uninstall``, ``terraform destroy``, ``rm -rf``).
+       - **WRITE_VERBS** — exact-token, case-insensitive match over the ``tool`` field's
+         string content ONLY (the action selector; ``tool`` may be structured — walked
+         recursively). Tokens are alphanumeric runs split on non-alphanumeric chars; an
+         exact-set membership avoids false positives (``execute_metric`` → token ``execute``
+         ≠ ``exec``) while STILL catching snake-case offending forms (``restart_pods`` →
+         token ``restart`` → MATCH; note regex ``\\b`` would WRONGLY miss these because
+         ``\\w`` includes ``_``). Covers §3.8's 7 forbidden + catch-all ``write``. A verb in
+         a NON-``tool`` data field (``query``/``timestamp_range``) is an ordinary
+         metric/column name — INERT under the read-only tool — and is correctly NOT a
+         violation (see :func:`_scan_readonly_violations` for the safety rationale).
+       - **WRITE_PATTERNS** — ``re.Pattern.search`` over ALL string leaves + the
+         JSON-serialized plan (catches command-string forms anywhere: ``kubectl
+         debug/exec/patch``, ``rollout restart/undo``, ``helm uninstall``,
+         ``terraform destroy``, ``rm -rf``).
      Either hit → **read-only violation**. The module AST-proves NO hardcoded duplicate
      verb list — it MUST import ``ci.denyset`` (the single source of truth).
   3. **Specificity check — the plan must identify the evidence to gather.** A valid plan
@@ -112,21 +116,19 @@ _VIOLATION_TYPE: str = "plan_readonly_violation"
 """Discriminator for a ``safety_flags`` entry written by this node (security audit trail)."""
 
 # Split a string into alphanumeric tokens (a-z, 0-9) — every non-alphanumeric char is a
-# separator. This is the "word boundary" the read-only deny-set needs: regex `\b` would
-# WRONGLY treat `_` as a word char (it is in `\w`), missing snake-case offending forms like
-# `restart_pods` / `exec_metric`. Tokenize-then-exact-match catches those AND avoids
-# false positives (`exec` inside `execute_metric` → token `execute` ≠ `exec`; benign
-# `http_requests_total` → tokens none of which is a forbidden verb).
+# separator. This is the "word boundary" the read-only deny-set needs (over the `tool`
+# field): regex `\b` would WRONGLY treat `_` as a word char (it is in `\w`), missing
+# snake-case offending forms like `restart_pods`. Tokenize-then-exact-match catches those
+# AND avoids false positives (`execute_metric` → token `execute` ≠ `exec`).
 _TOKEN_SPLIT = re.compile(r"[^a-zA-Z0-9]+")
 
 
 def _collect_strings(plan: Mapping[str, JsonValue]) -> list[str]:
-    """Recursively collect every string leaf from the JSON-safe plan + the serialized form.
+    """Collect EVERY string leaf from the JSON-safe plan + the serialized whole.
 
-    Defense-in-depth: the deny-set is scanned over (a) each individual string leaf AND (b)
-    the full ``json.dumps`` of the plan. ``WRITE_VERBS`` runs as tokenize-exact-match on
-    the leaves; ``WRITE_PATTERNS`` runs as ``re.Pattern.search`` over the serialized form
-    (command strings like ``kubectl exec ...`` survive serialization). Both layers scanned.
+    Used as the **pattern-scan input**: ``WRITE_PATTERNS`` (command-string forms) runs as
+    ``re.Pattern.search`` over each leaf AND the full ``json.dumps`` of the plan (command
+    strings like ``kubectl exec ...`` survive serialization and may appear in ANY field).
     """
     strings: list[str] = []
 
@@ -144,6 +146,34 @@ def _collect_strings(plan: Mapping[str, JsonValue]) -> list[str]:
         _walk(v)
     # Also scan the serialized whole (catches command-string patterns + any ordering nuance).
     strings.append(json.dumps(dict(plan), ensure_ascii=False, sort_keys=True))
+    return strings
+
+
+def _collect_tool_strings(plan: Mapping[str, JsonValue]) -> list[str]:
+    """Collect the string leaves from the ``tool`` field ONLY (the action selector).
+
+    Used as the **verb-scan input**: ``WRITE_VERBS`` runs as tokenize-exact-match over the
+    ``tool`` field's content only. ``tool`` may be a bare ``str`` (``"restart_pods"``) OR a
+    structured spec (``{"name": "restart_pods", ...}``) — walked recursively. Missing / None
+    / non-collection ``tool`` → empty (no verb match; the plan falls through to the
+    specificity check). See :func:`_scan_readonly_violations` for the scoping rationale.
+    """
+    tool: JsonValue | None = plan.get("tool")
+    if tool is None:
+        return []
+    strings: list[str] = []
+
+    def _walk(value: JsonValue) -> None:
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                _walk(item)
+
+    _walk(tool)
     return strings
 
 
@@ -183,13 +213,34 @@ def _pattern_matches(strings: list[str]) -> list[str]:
 
 
 def _scan_readonly_violations(plan: Mapping[str, JsonValue]) -> list[str]:
-    """Return the ordered, distinct read-only deny-set tokens matched anywhere in the plan.
+    """Return the ordered, distinct read-only deny-set tokens matched by the gate.
 
-    Verbs (exact-token) first, then command-string patterns. Each token is one audit entry.
-    Returns ``[]`` for a read-only-clean plan.
+    **Two differently-scoped scans (option B):**
+      - **WRITE_VERBS — exact-token match over the ``tool`` field ONLY** (the action
+        selector). A write verb as a token in ``tool`` = the plan NAMES a write action →
+        violation. ``tool`` is walked recursively (bare str OR structured).
+      - **WRITE_PATTERNS — regex search over ALL string leaves + the serialized plan.** A
+        command-string form (``kubectl exec`` / ``rm -rf``) anywhere = a shell-command write
+        intent → violation (patterns may legitimately appear in any field).
+
+    Verbs (tool-scoped) first, then command-string patterns (all-fields). Each token is one
+    audit entry. Returns ``[]`` for a read-only-clean plan.
+
+    **Safety rationale (no real threat lost by tool-scoping verbs):** the action a dispatched
+    plan performs is determined entirely by the registered ``tool`` — ``executor_router``
+    (3.5) dispatches ONLY via ``registry.lookup(tool)``, and the registry holds exactly the
+    10 read-only §3.6 tools; a write-named tool (e.g. ``restart_pods``) is simply NOT
+    registered → ``lookup`` KeyError → envelope (2-3) → never executes. So a verb in ``tool``
+    is the plan naming a write action (REJECT here, defense-in-depth ahead of the lookup),
+    while ``query`` / ``timestamp_range`` are INERT data passed to a read-only tool — a verb
+    token there (e.g. ``rate(process_exec_summary[5m])``, ``write_throughput_bytes``) is an
+    ordinary metric/column name, NOT a write requirement → must PASS. The registry +
+    ``executor_router`` lookup are the HARD backstop for compound tool names (the registry's
+    exact-name registration match does not catch ``restart_pods`` itself; this gate does).
     """
-    strings = _collect_strings(plan)
-    return [*_verb_matches(strings), *_pattern_matches(strings)]
+    tool_strings = _collect_tool_strings(plan)
+    all_strings = _collect_strings(plan)
+    return [*_verb_matches(tool_strings), *_pattern_matches(all_strings)]
 
 
 def _has_field(plan: Mapping[str, JsonValue], field: str) -> bool:

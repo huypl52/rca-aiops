@@ -190,39 +190,97 @@ def test_write_pattern_command_strings_are_rejected() -> None:
         assert _safety_flags_of(result), f"pattern '{label}' produced no safety_flags entry"
 
 
-def test_verb_scanned_across_all_string_values_not_just_tool() -> None:
-    """AC1 / defense-in-depth: the deny-set scans ALL string values, not only the ``tool`` field."""
+def test_verb_token_in_data_field_is_NOT_rejected_read_only() -> None:
+    """AC1 / option B: a write-verb token in a NON-``tool`` data field (``query``) is INERT — it is
+    a search term passed to a read-only tool, NOT a write requirement → PROCEED, no safety_flags.
+
+    The action a dispatched plan performs is determined entirely by the registered ``tool``
+    (executor_router 3.5 dispatches only via registry.lookup, which holds the 10 read-only §3.6
+    tools). So ``query`` / ``timestamp_range`` are inert data; a verb token there is an ordinary
+    search term. The verb scan is therefore scoped to ``tool`` only; only command-string
+    WRITE_PATTERNS scan all fields.
+    """
     node = build_plan_validator()
-    # tool is benign; the verb hides in the query.
+    # tool is benign (loki = read-only log search); the verb hides in the query.
     plan: dict[str, JsonValue] = {
         "tool": "loki",
         "query": "show me the remediate action log",
         "timestamp_range": {"a": 1},
     }
     result = node(_state(plan=plan))
+    assert result["next_action"] == _PROCEED
+    assert "safety_flags" not in result
+
+
+def test_benign_metric_name_containing_verb_token_is_not_rejected() -> None:
+    """AC1 / option B (leader ruling): a benign metric/column name containing a verb token
+    (``process_exec_summary`` → token ``exec``) lives in a data field → INERT under the read-only
+    tool → PROCEED. The verb scan sees ONLY the ``tool`` field, so ``query``-resident verb tokens
+    are not over-rejected (LP11 case). The token-distinction point still holds: even in ``tool``,
+    ``execute_metric`` → token ``execute`` ≠ ``exec``."""
+    node = build_plan_validator()
+    plan: dict[str, JsonValue] = {
+        "tool": "prometheus",
+        "query": "rate(process_exec_summary[5m])",
+        "timestamp_range": {"a": 1},
+    }
+    result = node(_state(plan=plan))
+    assert result["next_action"] == _PROCEED
+    assert "safety_flags" not in result
+
+
+def test_realistic_metric_and_column_names_are_not_over_rejected() -> None:
+    """AC1 / option B: realistic Epic-6 PromQL/LogQL metric & column names containing verb tokens
+    (scale_factor / write_throughput_bytes / deleted_at) live in data fields → INERT → PROCEED.
+    These MUST pass for the POC demo on realistic data (LP12/LP13 cases)."""
+    node = build_plan_validator()
+    cases: list[dict[str, JsonValue]] = [
+        {"tool": "prometheus", "query": "scale_factor", "timestamp_range": {"a": 1}},
+        {"tool": "prometheus", "query": "write_throughput_bytes", "timestamp_range": {"a": 1}},
+        {
+            "tool": "loki",
+            "query": '{app="api"} | json | deleted_at!=""',
+            "timestamp_range": {"a": 1},
+        },
+    ]
+    for plan in cases:
+        result = node(_state(plan=plan))
+        assert result["next_action"] == _PROCEED, f"over-rejected benign plan: {plan}"
+        assert "safety_flags" not in result
+
+
+def test_option_b_contract_verb_in_tool_rejects_verb_in_data_passes() -> None:
+    """AC1 / option B contract pin: the SAME verb token REJECTS when it is in ``tool`` (names a write
+    action) but PASSES when it is in a data field (inert). The scoping boundary is the field."""
+    node = build_plan_validator()
+    # bare verb token in a DATA field → inert → PROCEED
+    inert: dict[str, JsonValue] = {
+        "tool": "prometheus",
+        "query": "exec",
+        "timestamp_range": {"a": 1},
+    }
+    assert node(_state(plan=inert))["next_action"] == _PROCEED
+    # the SAME verb token in ``tool`` → names a write action → REJECT
+    write_action: dict[str, JsonValue] = {
+        "tool": "restart",
+        "query": "x",
+        "timestamp_range": {"a": 1},
+    }
+    result = node(_state(plan=write_action))
     assert result["next_action"] == _REPLAN
     assert _safety_flags_of(result)
 
 
-def test_process_exec_summary_is_flagged_security_conservative_FLAG() -> None:
-    """FLAG (leader DEEP): the leader brief lists ``process_exec_summary`` as a should-NOT-flag
-    false-positive, alongside ``execute_metric``. But that is **inconsistent** with the explicit
-    security probe ``tool:"restart_pods"`` → reject: ``restart_pods`` requires ``_`` as a SEPARATOR
-    (tokenize), while ``process_exec_summary`` requires ``_`` as a WORD-CHAR (regex ``\\b``). No
-    uniform string rule satisfies both. This node is SECURITY-CRITICAL + fail-closed: tokenize
-    catches ``restart_pods`` (the security requirement) and ALSO flags ``process_exec_summary``
-    (a benign, bounded replan — recoverable via replan/max_iterations). Failing the security
-    probe (a write plan slipping through) is far worse than a benign false positive. This test
-    asserts the security-conservative choice; flagging for leader adjudication.
-    """
+def test_write_verb_in_structured_tool_spec_is_rejected() -> None:
+    """AC1 / option B: ``tool`` may be a structured spec — the verb scan walks it recursively, so a
+    verb inside ``tool``'s nested ``name`` is still caught (defense-in-depth on the action selector)."""
     node = build_plan_validator()
     plan: dict[str, JsonValue] = {
-        "tool": "loki",
-        "query": "process_exec_summary",
+        "tool": {"name": "restart_pods", "version": "v1"},
+        "query": "x",
         "timestamp_range": {"a": 1},
     }
     result = node(_state(plan=plan))
-    # Security-conservative: flagged (token `exec` matches WRITE_VERBS).
     assert result["next_action"] == _REPLAN
     assert _safety_flags_of(result)
 
@@ -341,8 +399,12 @@ def test_safety_flag_entry_shape_is_type_matched_detail() -> None:
 
 
 def test_distinct_violations_get_distinct_deterministic_keys() -> None:
-    """AC3: multiple distinct offending tokens → distinct ``pv_NNN`` keys (deterministic order). verbs
-    before patterns."""
+    """AC3 / option B: multiple distinct offending tokens → distinct ``pv_NNN`` keys
+    (deterministic order, verbs-before-patterns). Under option B the verb scan sees ONLY
+    ``tool``, so ``{"tool":"restart","query":"kubectl exec nginx"}`` yields TWO entries:
+    ``restart`` (verb in tool) + ``kubectl exec`` (command-string pattern in query). The
+    standalone ``exec`` token in the query is NOT flagged (it is redundant with the
+    ``kubectl exec`` pattern and lives in an inert data field)."""
     node = build_plan_validator()
     plan: dict[str, JsonValue] = {
         "tool": "restart",
@@ -352,9 +414,7 @@ def test_distinct_violations_get_distinct_deterministic_keys() -> None:
     result = node(_state(plan=plan))
     sf = _safety_flags_of(result)
     keys = list(sf.keys())
-    assert keys == ["pv_001", "pv_002", "pv_003"], (
-        keys
-    )  # restart + exec (verb) + kubectl exec (pattern)
+    assert keys == ["pv_001", "pv_002"], keys  # restart (verb) + kubectl exec (pattern)
     matched: list[str] = []
     for k in keys:
         entry = sf[k]
@@ -362,7 +422,7 @@ def test_distinct_violations_get_distinct_deterministic_keys() -> None:
         token = entry["matched"]
         assert isinstance(token, str)
         matched.append(token)
-    assert matched == ["restart", "exec", "kubectl exec"]
+    assert matched == ["restart", "kubectl exec"]
 
 
 def test_safety_flags_dict_merges_via_reducer() -> None:
