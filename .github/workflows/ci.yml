@@ -70,10 +70,12 @@ jobs:
       - name: "Gate #4: floor determinism [PLACEHOLDER — Epic 4]"
         run: echo "TODO(Epic 4): floor_check pure-function (same input → same output) + declarative registry schema-validate at load (AD-12)"
 
-      # Gate #5 — contract schema preservation 18/9-field (AD-13 #5 / AD-6).
-      # PLACEHOLDER: filled by Story 0.2 (IncidentTrigger 18-field + Evidence 9-field models).
-      - name: "Gate #5: contract schema 18/9-field [PLACEHOLDER — Story 0.2]"
-        run: echo "TODO(Story 0.2): assert IncidentTrigger 18-field §3.4 + Evidence 9-field §3.6 no drift (AD-6)"
+      # Gate #5 — contract schema preservation 18/9-field (AD-13 #5 / AD-6). HARD-FAIL, no opt-out.
+      # Story 0.2: asserts IncidentTrigger == 18 §3.4 fields + Evidence == 9 §3.6 fields, no drift.
+      # Source-of-truth field-set = ci/contract_schema.py (spec-derived, NOT the models).
+      # Negative test (tests/ci/test_gate5_contract_schema.py) proves drift → FAIL.
+      - name: "Gate #5: contract schema 18/9-field (HARD-FAIL)"
+        run: uv run pytest tests/ci/test_gate5_contract_schema.py -v
 
       # Gate #6 — benchmark determinism (AD-13 #6 / FR-10).
       # PLACEHOLDER: filled by Epic 6 (11-scenario benchmark + calibration/partial-credit/anti-hallucination).
