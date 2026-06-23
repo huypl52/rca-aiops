@@ -1,0 +1,81 @@
+name: ci
+
+# CI invariants (AD-13). Story 0.1 wires gates #1 + #2 (HARD-FAIL, no opt-out).
+# Gates #3-#6 are placeholders filled by later epics (see ci/GATES.md).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-type-test:
+    name: lint + type + test + gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies (reproducible, from uv.lock)
+        run: uv sync --frozen --group dev
+
+      # ---- Lint (Ruff) — HARD-FAIL ----
+      - name: ruff check
+        run: uv run ruff check
+
+      - name: ruff format --check
+        run: uv run ruff format --check
+
+      # ---- Type-check (mypy) — HARD-FAIL ----
+      - name: mypy
+        run: uv run mypy .
+
+      # ---- Tests (pytest) — HARD-FAIL ----
+      - name: pytest
+        run: uv run pytest
+
+      # =====================================================================
+      # CI INVARIANT GATES (AD-13)
+      # =====================================================================
+
+      # Gate #1 — read-only registry (AD-13 #1 / AD-3 BLOCKER). HARD-FAIL, no opt-out.
+      - name: "Gate #1: read-only registry (HARD-FAIL)"
+        run: uv run python ci/gate1_readonly_registry.py --root .
+
+      # Gate #2 — dependency-direction (AD-13 #2 / AD-1 / AD-2). HARD-FAIL, no opt-out.
+      - name: "Gate #2: dependency-direction import-linter (HARD-FAIL)"
+        run: uv run lint-imports
+
+      # Gate #3 — type-coherence 2-tier round-trip (AD-13 #3 / AD-9).
+      # PLACEHOLDER: filled by Story 0.3 (InvestigationState + reducer wiring).
+      - name: "Gate #3: type-coherence round-trip [PLACEHOLDER — Story 0.3]"
+        run: echo "TODO(Story 0.3): InvestigationState TypedDict ⊆ Pydantic fields + serialize→deserialize round-trip (AD-9)"
+
+      # Gate #4 — floor determinism (AD-13 #4 / AD-12).
+      # PLACEHOLDER: filled by Epic 4 (floor registry + floor_check pure-function test).
+      - name: "Gate #4: floor determinism [PLACEHOLDER — Epic 4]"
+        run: echo "TODO(Epic 4): floor_check pure-function (same input → same output) + declarative registry schema-validate at load (AD-12)"
+
+      # Gate #5 — contract schema preservation 18/9-field (AD-13 #5 / AD-6).
+      # PLACEHOLDER: filled by Story 0.2 (IncidentTrigger 18-field + Evidence 9-field models).
+      - name: "Gate #5: contract schema 18/9-field [PLACEHOLDER — Story 0.2]"
+        run: echo "TODO(Story 0.2): assert IncidentTrigger 18-field §3.4 + Evidence 9-field §3.6 no drift (AD-6)"
+
+      # Gate #6 — benchmark determinism (AD-13 #6 / FR-10).
+      # PLACEHOLDER: filled by Epic 6 (11-scenario benchmark + calibration/partial-credit/anti-hallucination).
+      - name: "Gate #6: benchmark determinism [PLACEHOLDER — Epic 6]"
+        run: echo "TODO(Epic 6): 11-scenario run + partial-credit/tolerance ON TOP OF binary conjunction §3.7 + anti-hallucination raw-vs-summary (FR-10)"

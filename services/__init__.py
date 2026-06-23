@@ -1,0 +1,1 @@
+"""Use-case services — ingest, normalize, dispatch, read-store. ONE-WAY: import graph via entry contract (invoke/stream + investigation_id); MUST NOT import graph node/state internals (AD-2). (Story 1.x fill.)"""

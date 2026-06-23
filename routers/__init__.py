@@ -1,0 +1,1 @@
+"""FastAPI routers — ingest endpoints (/api/alerts/{prometheus,grafana}, /api/events/kubernetes) + read-store (/api/investigations/{id}). ONE-WAY: may import services; MUST NOT import graph internals. (Story 1.x fill.)"""

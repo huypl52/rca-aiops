@@ -1,0 +1,1 @@
+"""Read-only external clients — prometheus, loki, k8s, qdrant, topology (AD-3). ONE-WAY: MUST NOT import graph or services; MUST NOT expose write/exec/patch/delete/scale/rollback/restart/remediate (read-only boundary, §3.8). (Story 2.2 fill.)"""

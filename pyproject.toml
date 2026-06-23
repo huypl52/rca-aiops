@@ -1,0 +1,113 @@
+[project]
+name = "rca-aiops"
+version = "0.1.0"
+description = "RCA AI Agent POC — read-only investigator (LangGraph Plan-Execute-Reflect) + 5-microservice demo + 11-scenario benchmark."
+readme = "README.md"
+requires-python = ">=3.12,<4"
+license = { text = "Proprietary" }
+authors = [{ name = "26-rca-aiops" }]
+
+# D2 — version pin (PyPI stable, locked 2026-06-23). uv.lock freezes exact versions.
+dependencies = [
+    "langgraph==1.2.6",
+    "langgraph-checkpoint-sqlite==3.1.0",
+    "fastapi==0.138.0",
+    "uvicorn==0.49.0",
+    "pydantic==2.13.4",
+    "qdrant-client==1.18.0",
+]
+
+[dependency-groups]
+# D1 — tooling (web-verified 2026-06-23): Ruff (lint+format), uv (runner), mypy (type), pytest, import-linter (gate #2).
+dev = [
+    "ruff>=0.11",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Flat layout — packages live at repo root.
+packages = [
+    "routers",
+    "services",
+    "graph",
+    "adapters",
+    "tools",
+    "models",
+    "eval",
+    "config",
+    "ci",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff (lint + format) — replaces Black + isort + Flake8.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["_bmad", "_bmad-output", "docs", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["E501"]  # line-length enforced by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "config", "ci"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# mypy (type-check) — ecosystem-aligned (FastAPI/Pydantic/LangChain CI).
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# Scaffold has no business code yet; allow untyped/empty modules without noise.
+# Each story that adds code tightens as needed.
+exclude = "^(_bmad|_bmad-output|docs|\\.venv)/"
+
+[[tool.mypy.overrides]]
+# Third-party stubs not shipped — relax missing-stubs noise for the runtime deps.
+module = [
+    "langgraph.*",
+    "langgraph_checkpoint_sqlite.*",
+    "qdrant_client.*",
+    "uvicorn.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.3"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+# ---------------------------------------------------------------------------
+# import-linter (CI gate #2 — dependency-direction HARD-FAIL, AD-13 #2 / AD-1)
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["routers", "services", "graph", "adapters", "tools"]
+
+[[tool.importlinter.contracts]]
+name = "One-way layered architecture (AD-1 / AD-2)"
+type = "layers"
+layers = [
+    "routers",
+    "services",
+    "graph",
+    "adapters",
+    "tools",
+]
+# layers contract: each layer may only import layers at the same or later index.
+# routers(0) → services/graph/adapters/tools ; tools(4) → nothing.
+# This forbids back-edges: adapters↛graph, adapters↛services, tools↛graph, tools↛services, graph↛routers.
+# Circular imports = fail. Enforced HARD-FAIL in CI.

@@ -1,0 +1,1 @@
+"""LangGraph PE-R graph — 8 nodes (incident_context_builder, preplanning_playbook_retriever, hypothesis_planner, plan_validator, executor_router, evidence_normalizer, reflector, rca_writer) + edges, compiled once (AD-2). ONE-WAY: MUST NOT import routers. (Story 0.3/3.x fill.)"""

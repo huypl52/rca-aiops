@@ -1,0 +1,1 @@
+"""Read-only tool registry + executor_router dispatch (AD-3, FR-5). ONE-WAY: MUST NOT import graph or services; MUST NOT expose write/exec/patch/delete/scale/rollback/restart/remediate. Enforced at registry level, NOT via LLM. (Story 2.1/2.3 fill.)"""
