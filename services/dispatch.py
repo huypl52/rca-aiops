@@ -204,9 +204,7 @@ class Dispatcher:
         else:
             resume_trigger = existing.trigger
         # enqueue non-blocking background run
-        self._executor.submit(
-            investigation_id, self._run(investigation_id, resume_trigger)
-        )
+        self._executor.submit(investigation_id, self._run(investigation_id, resume_trigger))
         return investigation_id
 
     async def _run(self, investigation_id: str, trigger: dict[str, Any]) -> None:

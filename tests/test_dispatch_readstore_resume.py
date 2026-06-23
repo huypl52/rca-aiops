@@ -169,9 +169,7 @@ class _RecordingRunner:
         self, trigger: dict[str, Any], investigation_id: str, max_iterations: int
     ) -> GraphRunnerResult:
         self.calls += 1
-        result: GraphRunnerResult = await self.inner.run(
-            trigger, investigation_id, max_iterations
-        )
+        result: GraphRunnerResult = await self.inner.run(trigger, investigation_id, max_iterations)
         return result
 
 
@@ -338,8 +336,15 @@ def test_ac2_dispatcher_does_not_import_compiled_graph() -> None:
     )
     # no compiled-graph / node / state-internal symbols
     forbidden = _names(DISPATCH_SRC) & {
-        "StateGraph", "compile", "add_node", "add_edge", "SqliteSaver", "MemorySaver",
-        "incident_context_builder", "create_initial_state", "InvestigationState",
+        "StateGraph",
+        "compile",
+        "add_node",
+        "add_edge",
+        "SqliteSaver",
+        "MemorySaver",
+        "incident_context_builder",
+        "create_initial_state",
+        "InvestigationState",
     }
     assert not forbidden, f"dispatcher must not reference compiled-graph internals: {forbidden}"
 
@@ -473,7 +478,11 @@ def test_ac5_no_duplicate_concurrent_task() -> None:
 def test_ac6_no_langgraph_checkpointer_attached() -> None:
     """1-4 uses an in-process registry/executor — NO LangGraph checkpointer (3-5/7-4)."""
     forbidden = (_names(DISPATCH_SRC) | _names(RUNNER_SRC)) & {
-        "SqliteSaver", "MemorySaver", "PostgresSaver", "checkpointer", "StateGraph",
+        "SqliteSaver",
+        "MemorySaver",
+        "PostgresSaver",
+        "checkpointer",
+        "StateGraph",
     }
     assert not forbidden, f"1-4 must NOT attach a LangGraph checkpointer (7-4): {forbidden}"
 
@@ -564,7 +573,13 @@ def test_ac9_read_only_trace_note_present() -> None:
 def test_ac9_no_remediation_or_write_path_in_services() -> None:
     """No write/remediation/exec path in the dispatcher/store (tool registry = 2-1)."""
     forbidden = (_names(DISPATCH_SRC) | _names(INVESTIGATIONS_SRC)) & {
-        "subprocess", "kubectl", "patch", "delete", "scale", "rollback", "exec",
+        "subprocess",
+        "kubectl",
+        "patch",
+        "delete",
+        "scale",
+        "rollback",
+        "exec",
     }
     assert not forbidden, f"no write/remediation path in services (AD-3/2-1): {forbidden}"
 
@@ -586,7 +601,9 @@ def test_ac10_gate2_one_way_contract_kept() -> None:
     """The import-linter layers contract is KEPT (routers→services→graph→...)."""
     result = subprocess.run(
         ["uv", "run", "lint-imports"],
-        capture_output=True, text=True, cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
     )
     assert result.returncode == 0, f"gate #2 BROKEN:\n{result.stdout}\n{result.stderr}"
     assert "KEPT" in result.stdout
