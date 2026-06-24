@@ -89,15 +89,22 @@ jobs:
       # conjunction blob, driving the compiled graph over all 11, is byte-stable across PYTHONHASHSEED);
       # partial-credit/tolerance window ON the conjunction + anti-hallucination raw-vs-summary (SM-3)
       # → Story 6.3 (DONE — the graded scoring blob, computed ABOVE the conjunction over all 11, is
-      # byte-stable across PYTHONHASHSEED; §2D); playbook-retrieval independent axis (SM-4) → 6.4. A
-      # green gate #6 here means "the inject→symptom AND the full-agent conjunction AND the graded
-      # scoring axes RUN + are DETERMINISTIC", NOT "the agent passes the benchmark scoring" — the
-      # honest baselines are SM-1 = 0% (the graph does not converge, 5-A1; fixing that is a SEPARATE
-      # story) + SM-2 blocked (no reports) + graded coverage {a≈1.0, b=1.0, c=0, d=0, e=0} + SM-3
-      # evidence-layer 100% / report-layer blocked; the scoring PASS + any confidence/SM cutoff (D4)
-      # are NOT asserted here.
+      # byte-stable across PYTHONHASHSEED; §2D); playbook-retrieval independent axis (SM-4 / FR-10e /
+      # A6) + train/eval split (Q8 / FR-10) → Story 6.4 (DONE — the retrieval blob, two INDEPENDENT
+      # columns ABOVE the 6.1/6.2/6.3 baselines — SM-4 = the playbook-retrieval independent axis reading
+      # the REAL playbook_hits + Q8 = the deterministic leak-free train/eval partition — is byte-stable
+      # across PYTHONHASHSEED; §2C). A green gate #6 here means "the inject→symptom AND the full-agent
+      # conjunction AND the graded scoring AND the SM-4 retrieval + Q8 split axes RUN + are
+      # DETERMINISTIC", NOT "the agent passes the benchmark scoring" — the honest baselines are
+      # SM-1 = 0% (the graph does not converge, 5-A1; fixing that is a SEPARATE story) + SM-2 blocked
+      # (no reports) + graded coverage {a≈1.0, b=1.0, c=0, d=0, e=0} + SM-3 evidence-layer 100% /
+      # report-layer blocked + SM-4 EMPTY/DEGRADED (playbook_hits=[] 11/11 — no Qdrant corpus, 5-A1-
+      # family; R1: do NOT add retrieval content) + Q8 leak-free/calibration-moot (no reports — 5-A1);
+      # the scoring PASS + any confidence/SM cutoff + the retrieval PASS + the Q8 split ratio (D4) are
+      # NOT asserted here.
       - name: "Gate #6: benchmark determinism axis (HARD-FAIL)"
         run: |
           uv run pytest tests/ci/test_gate6_benchmark_determinism.py -v
           uv run pytest tests/ci/test_gate6_conjunction_determinism.py -v
           uv run pytest tests/ci/test_gate6_scoring_determinism.py -v
+          uv run pytest tests/ci/test_gate6_retrieval_determinism.py -v
