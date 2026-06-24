@@ -2,10 +2,14 @@
 
 Story 1.4 — AD-10 #3 (trace+report via store, no sync) / AD-9 (JSON-safe) /
 AD-10 #4 (at-least-once resume from store) / AD-10 #5 (terminal not-silent).
+Story 5-2 — ``STATUS_PARTIAL`` (4-A2 honest-partial wiring end-to-end: runner
+``partial`` → registry ``partial`` → API ``partial``, NOT masked as ``failed``;
+AD-10 #5) + the OUTPUT-SIDE remediation-off guard (AC2 / T9 / D12 defense-in-depth).
 
 Maps ``investigation_id -> InvestigationRecord`` where a record carries:
 
-  - the REGISTRY-LEVEL lifecycle ``status`` (``running`` / ``success`` / ``failed``),
+  - the REGISTRY-LEVEL lifecycle ``status`` (``running`` / ``success`` / ``failed`` /
+    ``partial`` [5-2 — max-iter exhausted, inconclusive; AD-10 #5]),
   - a JSON-safe ``state_snapshot`` (the read-store projection),
   - the optional ``report`` (RCA, FR-9 — ``None`` until Epic 5),
   - the original ``trigger`` dict (kept for at-least-once resume; NOT exposed in
@@ -28,6 +32,9 @@ Read-only boundary (AD-3): the store is read-only projection — there is no
 write/remediation path. At-least-once resume is SAFE because re-running a
 read-only investigation has no side-effect to double-apply (AD-3 trace). The
 read-only tool registry / CI#1 HARD-FAIL = Story 2-1 (NOT implemented here).
+The 5-2 OUTPUT-SIDE remediation-off guard (``_strip_remediation``) runs in
+``view`` on the DEEP-COPIED projection — it STRIPS remediation action text (a
+read-only strip, NEVER a write, NEVER a synthesis); the stored record is intact.
 
 ONE-WAY (AD-1 / gate #2): stdlib only — does NOT import graph (no state-internals
 coupling, AD-2) / routers / adapters / tools. The store is a pure services
@@ -45,8 +52,15 @@ from typing import Any
 STATUS_RUNNING = "running"
 STATUS_SUCCESS = "success"
 STATUS_FAILED = "failed"
+# Story 5-2 (AD-10 #5): a max-iter-exhausted / inconclusive run ends ``partial`` —
+# the run ENDED (honest), NOT a crash to resume. ``partial`` IS terminal, so it is a
+# member of ``_TERMINAL`` (it is NOT re-dispatched by ``non_terminal``/resume). The
+# dispatcher accepts the runner's honest ``"partial"`` (4-A2 wiring) — it is NOT
+# masked as ``failed`` (AD-10 #5 — NOT a silent binary fail). Still REGISTRY-LEVEL:
+# add ``status`` ONLY here, NEVER to ``InvestigationState`` (13-key spine, AD-9).
+STATUS_PARTIAL = "partial"
 # Add `status` ONLY here (registry), NEVER to InvestigationState (13-key spine).
-_TERMINAL: frozenset[str] = frozenset({STATUS_SUCCESS, STATUS_FAILED})
+_TERMINAL: frozenset[str] = frozenset({STATUS_SUCCESS, STATUS_FAILED, STATUS_PARTIAL})
 
 
 @dataclass
@@ -76,6 +90,30 @@ class InvestigationReadView:
     status: str
     state_snapshot: dict[str, Any]
     report: dict[str, Any] | None = None
+
+
+def _strip_remediation(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Force ``report.remediation`` to empty/off at the output projection (AC2 / T9 / D12).
+
+    Story 5-2 — the OUTPUT-SIDE remediation-off guard (defense-in-depth). The POC emits
+    NO remediation action text (T9 / D12 — remediation is a prod product decision, §3.8).
+    This single read-path chokepoint forces ``report["remediation"]`` to ``[]`` in EVERY
+    projected read-view, regardless of what is stored — so the POC output boundary NEVER
+    leaks action text, even if a future/prod report carried it. The field stays PRESENT
+    (the contract keeps a prod slot) but is emptied.
+
+    READ-ONLY (§3.8 / AD-3): this operates ONLY on the projection (already deep-copied by
+    ``InvestigationStore.view``); it NEVER mutates the stored record, NEVER adds a write
+    path, and NEVER synthesizes remediation action text (the anti-invention discipline —
+    the same muscle as AD-6 on the producer side). A non-dict report (``None`` until the
+    rca_writer node runs, or a malformed value) is returned UNCHANGED — a field cannot be
+    stripped from a non-dict, and we do not invent structure.
+    """
+    if not isinstance(report, dict):
+        return report
+    # T9 / D12: remediation OFF at the output boundary (slot kept, emptied — never invented).
+    report["remediation"] = []
+    return report
 
 
 class InvestigationStore:
@@ -172,7 +210,10 @@ class InvestigationStore:
         """Read-store projection (``None`` → 404 lookup miss). Excludes ``trigger``.
 
         ``state_snapshot`` and ``report`` are DEEP-copied under ``_lock`` so the
-        response never aliases a dict the background loop mutates concurrently.
+        response never aliases a dict the background loop mutates concurrently. The
+        5-2 OUTPUT-SIDE remediation-off guard (``_strip_remediation``) runs on the
+        deep-copied ``report`` — every read-view forces ``remediation=[]`` (AC2 / T9),
+        so the POC output boundary is NEVER bypassable (the single client-read chokepoint).
         """
         with self._lock:
             record = self._records.get(investigation_id)
@@ -182,7 +223,11 @@ class InvestigationStore:
                 investigation_id=record.investigation_id,
                 status=record.status,
                 state_snapshot=copy.deepcopy(record.state_snapshot),
-                report=copy.deepcopy(record.report) if record.report is not None else None,
+                # The guard runs on the DEEP-COPIED projection: the stored record is NEVER
+                # mutated (read-only strip, §3.8 / AD-3); the output boundary always off.
+                report=_strip_remediation(
+                    copy.deepcopy(record.report) if record.report is not None else None
+                ),
             )
 
     def __len__(self) -> int:
@@ -220,6 +265,7 @@ __all__ = [
     "InvestigationRecord",
     "InvestigationStore",
     "STATUS_FAILED",
+    "STATUS_PARTIAL",
     "STATUS_RUNNING",
     "STATUS_SUCCESS",
     "default_store",

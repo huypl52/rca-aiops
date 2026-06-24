@@ -49,14 +49,16 @@ from typing import Any
 from graph.runner import ContextBuilderRunner, GraphRunner, GraphRunnerResult
 from services.investigations import (
     STATUS_FAILED,
+    STATUS_PARTIAL,
     STATUS_SUCCESS,
     InvestigationStore,
     default_store,
 )
 
 # Dispatcher-level lifetime cap (FR-7). The dispatcher owns the cap VALUE and
-# passes it to the runner, which honors it (exceed → status="failed"). Graph-
-# internal reflector-loop max-iter = Story 3-x (deferred — not enforced here).
+# passes it to the runner, which honors it (exceed → status="partial" — Story
+# 4-3 / AD-10 #5: max-iter exhaustion is an HONEST partial, NOT a binary fail).
+# Graph-internal reflector-loop max-iter = Story 4-3 (deferred — not enforced here).
 # Small + configurable for deterministic tests; bumped for prod-like runs.
 MAX_ITERATIONS_DEFAULT: int = 100
 
@@ -231,9 +233,11 @@ class Dispatcher:
             return
 
         status = result.get("status", STATUS_SUCCESS)
-        # Defensive: only success/failed are valid terminal lifecycle states. An
-        # unknown status is a runner contract violation → FAILED (not silent).
-        if status not in (STATUS_SUCCESS, STATUS_FAILED):
+        # Defensive: success / failed / partial are valid terminal lifecycle states
+        # (5-2 / 4-A2): the runner's honest ``partial`` (max-iter exhausted) is passed
+        # through as ``STATUS_PARTIAL`` — NOT masked as ``failed`` (AD-10 #5). Any OTHER
+        # status is a runner contract violation → FAILED (not silent).
+        if status not in (STATUS_SUCCESS, STATUS_FAILED, STATUS_PARTIAL):
             status = STATUS_FAILED
         self._store.set_terminal(
             investigation_id,

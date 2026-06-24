@@ -46,7 +46,8 @@ class GraphRunnerResult(TypedDict, total=False):
     """
 
     status: str
-    """Terminal status: ``"success"`` | ``"failed"`` (dispatcher-level failure/cap)."""
+    """Terminal status: ``"success"`` | ``"failed"`` | ``"partial"`` (``"partial"`` =
+    max-iter exhausted / inconclusive — Story 4-3 / AD-10 #5, NOT a binary fail)."""
 
     state_snapshot: dict[str, JsonValue]
     """JSON-safe projection of the terminal state (AD-9). Bounded subset of the
@@ -81,7 +82,8 @@ class GraphRunner(Protocol):
                 layer) — the dispatcher never touches state internals.
             investigation_id: the investigation handle (poll/resume key).
             max_iterations: dispatcher-level lifetime cap (FR-7); the runner
-                honors it (exceed → ``status="failed"``).
+                honors it (exceed → ``status="partial"`` — Story 4-3 / AD-10 #5,
+                an honest inconclusive outcome, NOT a binary fail).
 
         Returns:
             terminal ``GraphRunnerResult``. Raising propagates to the dispatcher,
