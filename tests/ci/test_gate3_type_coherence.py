@@ -46,16 +46,19 @@ from __future__ import annotations
 import datetime
 import json
 from collections.abc import Mapping
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.graph import END, START, StateGraph
 
 from ci.contract_schema import (
     INCIDENT_TRIGGER_GROUPING_FIELDS,
     SPEC_EVIDENCE_FIELDS,
     SPEC_INCIDENT_TRIGGER_FIELDS,
 )
+from graph.checkpoint import build_durable_store
 from graph.state import (
     SCHEMA_VERSION,
     InvestigationState,
@@ -124,6 +127,47 @@ def _roundtrip(state: InvestigationState) -> InvestigationState:
     loaded = _SERDE.loads_typed((type_str, blob))
     assert isinstance(loaded, dict), f"round-trip must yield a dict, got {type(loaded)}"
     return loaded  # type: ignore[return-value]
+
+
+def _identity_node(_state: InvestigationState) -> dict[str, JsonValue]:
+    """No-op node: returns no updates so the checkpoint persists the input state verbatim.
+
+    Vehicle for :func:`_real_checkpoint_roundtrip` — a minimal IDENTITY graph over
+    ``InvestigationState`` drives the checkpointer WITHOUT node logic, so the persisted state
+    IS the input state (the comparison is serializer+backend fidelity, not node correctness).
+    """
+    return {}
+
+
+def _real_checkpoint_roundtrip(state: InvestigationState, db_path: Path) -> InvestigationState:
+    """Persist ``state`` to a REAL ``AsyncSqliteSaver`` checkpoint + reload it (CS Q4 / Story 7-4 AC1).
+
+    The on-disk analog of :func:`_roundtrip`: where ``_roundtrip`` proves the in-memory
+    JsonPlusSerializer round-trips the state, this proves the REAL sqlite backend (Story 7-4
+    AD-11) round-trips the full 13-key spine byte-equal — the BUILT-IN serializer (NO custom
+    serializer — AC1) survives a real persist→load. The sqlite ↔ postgres swap needs no custom
+    serde (AC1) precisely because the built-in serializer is portable, which this asserts.
+    """
+    import asyncio
+
+    async def _drive() -> InvestigationState:
+        saver, conn = await build_durable_store(str(db_path))
+        graph = StateGraph(InvestigationState)
+        graph.add_node("identity", _identity_node)  # type: ignore[call-overload]
+        graph.add_edge(START, "identity")
+        graph.add_edge("identity", END)
+        compiled = graph.compile(checkpointer=saver)
+        config: Any = {
+            "configurable": {"thread_id": "gate3-real-checkpoint"},
+            "recursion_limit": 5,
+        }
+        await compiled.ainvoke(state, config=config)
+        loaded = (await compiled.aget_state(config)).values
+        await conn.close()
+        assert isinstance(loaded, dict)
+        return cast(InvestigationState, loaded)
+
+    return asyncio.run(_drive())
 
 
 def _sample_trigger() -> dict[str, JsonValue]:
@@ -346,6 +390,23 @@ def test_gate3b_roundtrip_covers_scalar_replace_and_nesting() -> None:
     state["sufficiency"] = {"floor_pass": True, "ceiling": 0.91}
     state["report"] = {"root_cause": "x", "refs": [1, 2, 3], "nested": {"a": [True, None, 1.5]}}
     assert _roundtrip(state) == state
+
+
+def test_gate3c_real_checkpoint_persist_load_equal(tmp_path: Path) -> None:
+    """CS Q4 (Story 7-4): a REAL ``AsyncSqliteSaver`` checkpoint round-trips the 13-key state.
+
+    The on-disk companion to :func:`test_gate3b_roundtrip_deep_equal`: the same sample state
+    that survives the in-memory JsonPlusSerializer round-trip ALSO survives a real sqlite
+    persist→load byte-equal. The serializer's correctness was already gate #3's domain; this
+    asserts the durable BACKEND (AD-11, wired Story 7-4) does NOT corrupt it — the spine is
+    checkpoint-stable with the built-in serializer (NO custom serializer — AC1). This is the
+    natural home for the assertion: gate #3 owns type-coherence + serializer stability.
+    """
+    state = _sample_state()
+    loaded = _real_checkpoint_roundtrip(state, tmp_path / "gate3-checkpoint.db")
+    assert loaded == state, (
+        f"real-checkpoint round-trip deep-equality failed:\n  expected: {state}\n  loaded  : {loaded}"
+    )
 
 
 # ===========================================================================

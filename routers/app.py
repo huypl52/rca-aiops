@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from routers.ingest import router as ingest_router
 from routers.investigations import router as investigations_router
+from services.durable import wire_durable_dispatcher_if_configured
 from services.normalize import NormalizeError
 
 
@@ -82,3 +83,12 @@ def create_app() -> FastAPI:
 
 # Module-level app for `uvicorn routers.app:app` (deploy = Story 1-4 / Epic 7).
 app = create_app()
+
+
+# Wire the durable path at module load (no-op unless RCA_CHECKPOINT_DB is set). The wiring lives
+# in ``services.durable`` (the composition root): routers is FORBIDDEN from importing ``graph``
+# (``test_routers_module_does_not_import_forbidden_layers`` mirrors gate #2 — routers imports
+# only fastapi/pydantic/models/services), so it delegates to services (which may import graph,
+# forward — services(1)→graph(2)). Called AFTER `app = create_app()` so the base app is always
+# importable; the dispatcher swap is additive and does not touch the FastAPI factory itself.
+wire_durable_dispatcher_if_configured()

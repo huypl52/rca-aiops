@@ -92,6 +92,53 @@ class GraphRunner(Protocol):
         ...
 
 
+@runtime_checkable
+class InvestigationResumer(Protocol):
+    """PORT — cross-restart resume of a durable-checkpointed investigation (Story 7-4 — AD-11).
+
+    The dispatcher depends on this PORT (DI), NOT on the durable-store concrete type
+    (the async sqlite durable store lives in ``graph.checkpoint``, OUTSIDE this port
+    module's import surface — the dispatcher imports ONLY ``graph.runner``). When
+    injected, the dispatcher's ``resume_incomplete()`` scans the durable store for
+    incomplete investigations and resumes each at-least-once — the cross-restart
+    analogue of the in-process ``startup_scan`` (task-death, Story 1-4 AD-10 #4).
+
+    Why a SEPARATE PORT (not a method on ``GraphRunner``): resume drives the graph from a
+    CHECKPOINT with NO trigger (the checkpoint holds the state) — a different entry shape
+    from ``run(trigger, ...)``. Non-checkpointed runners (``ContextBuilderRunner`` /
+    ``StubGraphRunner``) cannot resume (no checkpoint) and simply do not implement this
+    PORT; ``resume_incomplete`` no-ops when no resumer is injected. The scan + resume are
+    ASYNC (the durable store + the graph drive are async); the dispatcher bridges them to
+    its sync ``resume_incomplete`` via its background loop.
+
+    Boundary (AD-3 vs AD-11 — INDEPENDENT, recorded in ``graph.checkpoint``): the durable
+    checkpoint is the agent persisting its OWN investigation state to a LOCAL file — NOT a
+    read-only-investigator violation. AD-3 / gate #1 forbids ``tools``/``adapters`` writing to
+    the SYSTEM-UNDER-INVESTIGATION; the checkpoint lives in ``graph`` (outside that scan set)
+    and writes a local file (NOT a SUT/cluster resource). This PORT names NO concrete store
+    type, so it carries none of that concern.
+    """
+
+    async def incomplete_investigations(self) -> list[tuple[str, dict[str, JsonValue]]]:
+        """Durable scan: incomplete ``(investigation_id, trigger)`` pairs to resume.
+
+        The durable store is the source of truth for "incomplete" — an investigation whose
+        last checkpoint is NOT at graph END (the next superstep is non-empty). The ``trigger``
+        is RECOVERED from the checkpointed state (a spine key) so the dispatcher can re-register
+        the read-store record (``set_terminal`` is a no-op without a record, Story 1-4).
+        """
+        ...
+
+    async def resume(self, investigation_id: str, max_iterations: int) -> GraphRunnerResult:
+        """Continue a checkpointed investigation to terminal WITHOUT a trigger.
+
+        The checkpoint holds the state; ``max_iterations`` is the dispatcher cap (FR-7). Reaching
+        END → ``success`` (+ report if the graph converged); re-exhausting the cap → an honest
+        ``partial`` (AD-10 #5). Raising propagates to ``status="failed"`` (NOT silent).
+        """
+        ...
+
+
 def _snapshot_from_state(state: InvestigationState) -> dict[str, JsonValue]:
     """Bounded JSON-safe projection of state for the read-store/registry (AD-9).
 

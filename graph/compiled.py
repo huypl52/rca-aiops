@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
@@ -54,6 +54,10 @@ if TYPE_CHECKING:
     # WITHOUT a module-level tools import — tools is imported LAZILY inside the composition root, as before).
     # ``if TYPE_CHECKING`` is never executed at runtime + is AST-invisible to top-level-import walkers, so
     # the §2.7 "module-level imports = graph + langgraph + stdlib ONLY" contract holds + lint-imports is clean.
+    # Story 7-4: ``BaseCheckpointSaver`` types the durable-store DI param (sqlite ↔ postgres swap = AC1);
+    # typing-only so the module surface stays langgraph-graph + graph + stdlib at runtime (no checkpoint import).
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from tools.port import ReadOnlyAdapterPort
 
 # ONE-WAY (AD-1 / gate #2): graph.state + graph.runner (same layer) + langgraph (3rd-party) + stdlib
@@ -247,6 +251,7 @@ def build_compiled_graph(
     ] = _evidence_normalizer_stub,
     reflector: Callable[[InvestigationState], dict[str, JsonValue]] = _reflector_stub,
     rca_writer: Callable[[InvestigationState], dict[str, JsonValue]] = _rca_writer_stub,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledStateGraph:  # type: ignore[type-arg]  # langgraph generic params unused here (stub)
     """DI-seam factory: compile the FULL 8-node §3.5 PE-R graph ONCE (immutable per process — AD-2).
 
@@ -276,6 +281,13 @@ def build_compiled_graph(
         reflector: the REF node (default the 4-3 DEFERRED stub).
         rca_writer: the WRT node (default the DI-default stub — real ``build_rca_writer`` is 5-1,
             wired at the composition root :func:`build_default_compiled_runner`).
+        checkpointer: optional durable-store saver (Story 7-4 — AD-11). ``None`` (default) → BARE
+            ``graph.compile()`` (byte-identical to pre-7-4; the determinism harness / gate #6 compiles
+            here so its agent outputs NEVER change). A non-None saver bakes the checkpointer in at
+            compile time (AD-2 immutable-once): ``run`` writes checkpoints as it streams;
+            ``resume`` / ``aget_state`` load them (cross-restart durability). Swap sqlite ↔ postgres
+            = swap the saver OBJECT (AC1) — this factory + the runner + the dispatcher are unchanged.
+            The serializer is the saver's built-in ``JsonPlusSerializer`` (AD-9 — NO custom serde).
 
     Returns:
         the compiled ``StateGraph(InvestigationState)`` (a ``CompiledStateGraph``), immutable per
@@ -316,7 +328,18 @@ def build_compiled_graph(
     # WRT → END.
     graph.add_edge(N_WRT, END)
 
-    return graph.compile()
+    if checkpointer is None:
+        # Byte-stable determinism path (Story 7-4): NO checkpointer → BARE compile, byte-identical to
+        # pre-7-4. The determinism harness (gate #6) + every non-durable caller compiles the graph here
+        # → its agent outputs are UNCHANGED (the checkpoint wiring NEVER perturbs the byte-stable blob).
+        # Cross-restart durability (AD-11) is OPT-IN via a non-None checkpointer (build_default_compiled_runner
+        # / the deployed composition root) — a DIFFERENT compiled-graph object, never the harness's.
+        return graph.compile()
+    # Durable path (Story 7-4 — AD-11): the checkpointer is baked in at compile time (AD-2 immutable-once).
+    # The SAME saver drives the checkpoint WRITE (run/resume stream → persist) + the resume READ
+    # (aget_state / astream(None, thread_id) → load). Portable serde = the saver's built-in
+    # JsonPlusSerializer (AD-9 — NO custom serializer; the 13-key spine is already JSON-safe, gate #3).
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +405,15 @@ class CompiledGraphRunner(GraphRunner):
         graph: CompiledStateGraph,  # type: ignore[type-arg]  # langgraph generic params unused here
         *,
         nodes_per_iteration: int = _NODES_PER_ITERATION,
+        checkpointed: bool = False,
     ) -> None:
         self._graph = graph
         self._nodes_per_iteration = nodes_per_iteration
+        # Story 7-4: ``checkpointed`` is True ONLY when the graph was compiled with a durable saver.
+        # When False (the determinism-harness / byte-stable default) ``run`` passes NO thread_id → the
+        # astream config is EXACTLY ``{"recursion_limit": ...}`` (byte-identical to pre-7-4). The flag
+        # is set by the composition root from ``checkpointer is not None`` (never guessed by callers).
+        self._checkpointed = checkpointed
 
     async def run(
         self,
@@ -394,11 +423,18 @@ class CompiledGraphRunner(GraphRunner):
     ) -> GraphRunnerResult:
         """Run the compiled graph for ``investigation_id`` to terminal (entry contract — AD-2)."""
         # The graph layer owns state (AD-2): the dispatcher never touches internals. Fresh state per
-        # run (no LangGraph checkpointer — cross-restart durability = Story 7-4). The astream +
+        # run. When ``self._checkpointed`` (Story 7-4 — a durable saver was baked in at compile time)
+        # the drive is scoped to ``thread_id=investigation_id`` so each superstep PERSISTS to the
+        # durable store (cross-restart durability, AD-11). When NOT checkpointed (the byte-stable
+        # determinism default) thread_id is None → the astream config is EXACTLY
+        # ``{"recursion_limit": ...}`` (byte-identical to pre-7-4 — gate #6 stays green). The astream +
         # GraphRecursionError→partial drive lives in :meth:`_drive_to_terminal` (shared with the
-        # Story-6.2 benchmark sibling :meth:`run_terminal_state` — singular drive, no divergence).
+        # Story-6.2 benchmark sibling :meth:`run_terminal_state` + :meth:`resume` — singular drive,
+        # no divergence).
         state = create_initial_state(incident_id=investigation_id, trigger=dict(trigger))
-        status, terminal = await self._drive_to_terminal(state, max_iterations)
+        status, terminal = await self._drive_to_terminal(
+            state, max_iterations, thread_id=investigation_id if self._checkpointed else None
+        )
         if status == "partial":
             # max_iterations exceeded → BOUNDED → honest PARTIAL carrying the reflector's last
             # sufficiency.gap ("chưa đủ — cần thêm X"). NOT a silent binary status="failed" — a genuine
@@ -421,15 +457,27 @@ class CompiledGraphRunner(GraphRunner):
 
     async def _drive_to_terminal(
         self,
-        state: InvestigationState,
+        state: InvestigationState | None,
         max_iterations: int,
+        *,
+        thread_id: str | None = None,
     ) -> tuple[str, InvestigationState]:
         """Stream the compiled graph to terminal → ``(status, last_state)`` — the shared drive (AD-2).
 
-        Used by BOTH :meth:`run` (the dispatcher PORT — projects an AD-9 BOUNDED snapshot) and
-        :meth:`run_terminal_state` (the Story-6.2 benchmark sibling — returns the FULL terminal state).
-        Extracted so the drive logic is SINGULAR: the port projection and the benchmark projection can
-        never diverge (both consume this one terminal state).
+        Used by :meth:`run` (the dispatcher PORT — projects an AD-9 BOUNDED snapshot),
+        :meth:`run_terminal_state` (the Story-6.2 benchmark sibling — returns the FULL terminal state),
+        and :meth:`resume` (Story 7-4 — continues a checkpointed investigation). Extracted so the drive
+        logic is SINGULAR: the port / benchmark / resume projections can never diverge (all consume this
+        one terminal state).
+
+        Story 7-4 (AD-11 — durable checkpoint): ``state`` is ``None`` for a RESUME (the checkpoint holds
+        the state — ``astream(None, config={thread_id})`` loads + continues); a fresh ``run`` /
+        ``run_terminal_state`` passes the seeded state. ``thread_id`` scopes the checkpoint to the
+        investigation; ``None`` (the byte-stable default) → the astream config is EXACTLY
+        ``{"recursion_limit": ...}`` (byte-identical to pre-7-4, gate #6 stays green). On a resume the
+        first streamed value is the checkpointed state, so ``last_state`` is always populated (the
+        resumer only resumes EXISTING checkpoints); the ``assert state is not None`` guards document
+        that unreachable invariant (never silently returns an empty state).
 
         Story 4-3 (FR-7 / AD-10 #5): STREAM with ``stream_mode="values"`` (NOT the default ``"updates"`` —
         which yields per-node update dicts, not the full state) so the latest FULL state is captured even
@@ -440,15 +488,95 @@ class CompiledGraphRunner(GraphRunner):
         ``GraphRecursionError``, caught here → an honest PARTIAL.
         """
         recursion_limit = max(max_iterations, 1) * self._nodes_per_iteration
+        # Typed ``Any``: astream's ``config`` is langgraph's ``RunnableConfig`` (a ``total=False``
+        # TypedDict) — an inline literal matches it, but a ``dict[str, Any]`` variable does not. Building
+        # it conditionally (thread_id only when checkpointed) needs a variable, so ``Any`` bridges to the
+        # TypedDict param without importing langchain_core's RunnableConfig into this module surface.
+        config: Any = {"recursion_limit": recursion_limit}
+        if thread_id is not None:
+            # Checkpoint-scoped drive (Story 7-4): thread_id → the durable store keys this investigation.
+            # state given → fresh write (run / run_terminal_state); state=None → resume (the checkpoint
+            # holds it). When thread_id is None (the byte-stable determinism default) config is EXACTLY
+            # {"recursion_limit": ...} — byte-identical to pre-7-4 (gate #6 stays green).
+            config["configurable"] = {"thread_id": thread_id}
         last_state: InvestigationState | None = None
         try:
-            async for chunk in self._graph.astream(
-                state, config={"recursion_limit": recursion_limit}, stream_mode="values"
-            ):
+            async for chunk in self._graph.astream(state, config=config, stream_mode="values"):
                 last_state = cast(InvestigationState, chunk)
         except GraphRecursionError:
-            return ("partial", last_state if last_state is not None else state)
-        return ("success", last_state if last_state is not None else state)
+            if last_state is not None:
+                return ("partial", last_state)
+            assert (
+                state is not None
+            )  # resume over a missing checkpoint recursed before any state (unreachable)
+            return ("partial", state)
+        if last_state is not None:
+            return ("success", last_state)
+        assert (
+            state is not None
+        )  # astream yielded nothing (resume over a missing checkpoint — unreachable)
+        return ("success", state)
+
+    # Story 7-4 (AD-11) — resume + checkpoint introspection. Valid ONLY on a CHECKPOINTED runner (the
+    # graph was compiled with a durable saver): ``aget_state`` requires a checkpointer. The resumer
+    # (:class:`graph.checkpoint.SqliteCheckpointResumer`) calls these to scan + drive; the dispatcher
+    # depends on the ``InvestigationResumer`` PORT (:class:`graph.runner.InvestigationResumer`), NEVER
+    # on these concrete methods directly (the AC2 seam — swap saver = swap store, not the dispatcher).
+
+    async def checkpoint_state(self, investigation_id: str) -> InvestigationState | None:
+        """Read the checkpointed state for ``investigation_id`` (Story 7-4 — AD-11), or ``None``.
+
+        Valid ONLY on a checkpointed runner. The resumer uses it to (a) decide incomplete vs terminal
+        (:meth:`checkpoint_is_complete`) and (b) RECOVER the trigger (spine key #3) so the dispatcher
+        can re-register the read-store record on restart (``set_terminal`` is a no-op without a record
+        — Story 1-4). ``None`` for a thread with no checkpoint (empty channel values).
+        """
+        snapshot = await self._graph.aget_state({"configurable": {"thread_id": investigation_id}})
+        values = snapshot.values
+        return cast(InvestigationState, values) if values else None
+
+    async def checkpoint_is_complete(self, investigation_id: str) -> bool:
+        """True iff the checkpointed investigation reached graph END (``StateSnapshot.next`` empty).
+
+        Valid ONLY on a checkpointed runner. ``next == ()`` → terminal (do NOT resume); non-empty →
+        INCOMPLETE (resume at-least-once). Source of truth for "incomplete" on restart (CS Q2): the
+        DURABLE store, NOT the in-process read-store (which is empty on restart).
+        """
+        snapshot = await self._graph.aget_state({"configurable": {"thread_id": investigation_id}})
+        return snapshot.next == ()
+
+    async def resume(self, investigation_id: str, max_iterations: int) -> GraphRunnerResult:
+        """Resume a checkpointed investigation to terminal WITHOUT a trigger (Story 7-4 — AD-11).
+
+        The checkpoint holds the state — ``_drive_to_terminal(None, thread_id=investigation_id)``
+        loads + continues. Reaching END → ``success`` (+ report if the graph converged); re-exhausting
+        the cap → an honest ``partial`` (AD-10 #5). The resumed investigation is STILL non-convergent in
+        the POC, so this typically returns ``partial`` / ``report=None`` — the DELIVERABLE is the resume
+        MECHANISM (interrupt → checkpoint → restart → resume-from-checkpoint), NOT working RCA. Raising
+        propagates to the dispatcher's ``status="failed"`` (NOT silent).
+
+        Precondition: a checkpoint EXISTS for ``investigation_id`` (the resumer only resumes existing
+        checkpoints, filtered by :meth:`checkpoint_is_complete`). The projection mirrors :meth:`run`'s
+        tail — the dispatcher contract is identical for a fresh run and a resumed one.
+        """
+        status, terminal = await self._drive_to_terminal(
+            None, max_iterations, thread_id=investigation_id
+        )
+        if status == "partial":
+            return GraphRunnerResult(
+                status="partial",
+                state_snapshot=_partial_snapshot(terminal),
+                report=None,
+            )
+        report_value = terminal.get("report")
+        report: dict[str, JsonValue] | None = (
+            report_value if isinstance(report_value, dict) else None
+        )
+        return GraphRunnerResult(
+            status="success",
+            state_snapshot=_snapshot_from_state(terminal),
+            report=report,
+        )
 
     async def run_terminal_state(
         self,
@@ -491,6 +619,7 @@ def build_default_compiled_runner(
     *,
     max_hypotheses: int = 5,
     adapter: ReadOnlyAdapterPort | None = None,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledGraphRunner:
     """Composition root: assemble the POC-default compiled-graph runner.
 
@@ -499,10 +628,17 @@ def build_default_compiled_runner(
     REF (4-3) + the REAL WRT (5-1), and returns a ready ``CompiledGraphRunner``. Deterministic +
     dependency-light for tests.
 
+    Story 7-4 (AD-11): ``checkpointer`` (default ``None``) opt-in bakes a durable saver into the
+    compiled graph so ``run``/``resume`` persist + reload investigation state across restart. ``None``
+    → BARE compile (byte-stable; the determinism harness / gate #6 compiles here, agent outputs
+    UNCHANGED). The returned runner is flagged ``checkpointed`` iff a saver was given — so the
+    byte-stable path NEVER emits a ``thread_id`` (gate #6 stays green).
+
     Production wiring (swapping this in as the default dispatcher) is applied at the composition root
     (``set_default_dispatcher(Dispatcher(runner=build_default_compiled_runner(), ...))``) — it is
     DEFERRED until Epic 5 makes the graph converge (the dispatcher module default stays
-    ``ContextBuilderRunner``; Story 1-4 tests stay green).
+    ``ContextBuilderRunner``; Story 1-4 tests stay green). The Story-7-4 durable dispatcher is wired
+    env-gated in ``routers/app`` (opt-in), NOT as the unconditional default.
     """
     # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.* same layer). Kept inside this composition
     # root so build_compiled_graph / CompiledGraphRunner / stubs stay tools-free (§2.7). Story 4-3 adds
@@ -567,8 +703,12 @@ def build_default_compiled_runner(
         # report=None WRT is a valid test/composition choice — e.g. the 3-5 happy-path runner, which
         # exercises the REF→WRT→END edge without producing a cited report).
         rca_writer=build_rca_writer(),
+        # 7-4: opt-in durable checkpointer (AD-11). None (default) → bare compile (byte-stable; the
+        # determinism harness compiles here). A non-None saver bakes the checkpointer in at compile time
+        # so run/resume persist to the store (AC1; swap = swap the saver object, not this factory).
+        checkpointer=checkpointer,
     )
-    return CompiledGraphRunner(graph)
+    return CompiledGraphRunner(graph, checkpointed=checkpointer is not None)
 
 
 __all__ = [

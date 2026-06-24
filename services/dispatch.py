@@ -44,9 +44,9 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, TypeVar
 
-from graph.runner import ContextBuilderRunner, GraphRunner, GraphRunnerResult
+from graph.runner import ContextBuilderRunner, GraphRunner, GraphRunnerResult, InvestigationResumer
 from services.investigations import (
     STATUS_FAILED,
     STATUS_PARTIAL,
@@ -61,6 +61,10 @@ from services.investigations import (
 # Graph-internal reflector-loop max-iter = Story 4-3 (deferred — not enforced here).
 # Small + configurable for deterministic tests; bumped for prod-like runs.
 MAX_ITERATIONS_DEFAULT: int = 100
+
+# Return-type variable for _BackgroundExecutor.run_sync (bridges a coroutine result to a sync caller
+# — the dispatcher's resume_incomplete runs the async resumer scan synchronously on its bg loop).
+_T = TypeVar("_T")
 
 
 class _BackgroundExecutor:
@@ -77,13 +81,20 @@ class _BackgroundExecutor:
     guard in the dispatcher); full concurrent throughput / WAL = deferred.
     """
 
-    def __init__(self) -> None:
-        self._loop: asyncio.AbstractEventLoop | None = None
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        # ``loop`` (Story 7-4): an EXTERNALLY-owned, ALREADY-RUNNING loop the executor reuses
+        # instead of creating its own. Used by the durable-dispatcher wiring so the durable
+        # checkpoint ``conn`` is built AND driven on ONE loop (same-loop → no cross-loop
+        # aiosqlite fragility). When None (the in-process default) the loop is created lazily on
+        # first use (existing behavior — unchanged for the 25 dispatch tests).
+        self._loop: asyncio.AbstractEventLoop | None = loop
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._tasks: dict[str, asyncio.Task[Any]] = {}
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is not None:
+            return self._loop  # injected (already running on a caller-managed daemon thread)
         with self._lock:
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
@@ -108,6 +119,18 @@ class _BackgroundExecutor:
         """
         loop = self._ensure_loop()
         asyncio.run_coroutine_threadsafe(self._track(investigation_id, coro), loop)
+
+    def run_sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
+        """Run ``coro`` on the background loop + BLOCK the caller until it returns (Story 7-4).
+
+        Used by the dispatcher's cross-restart ``resume_incomplete`` to run the ASYNC durable-store
+        resumer scan (``InvestigationResumer.incomplete_investigations``) synchronously from its sync
+        startup caller. MUST be called from OUTSIDE the background loop (the caller blocks until the
+        coro completes on the loop thread) — the resume scan never re-enters the loop, so no deadlock.
+        """
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()  # blocks the caller until the coro completes on the loop thread
 
     async def _track(self, investigation_id: str, coro: Coroutine[Any, Any, None]) -> None:
         # Runs ON the background loop — the running loop IS this executor's loop.
@@ -158,11 +181,20 @@ class Dispatcher:
         runner: GraphRunner | None = None,
         store: InvestigationStore | None = None,
         max_iterations: int = MAX_ITERATIONS_DEFAULT,
+        resume_source: InvestigationResumer | None = None,
+        executor_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._runner: GraphRunner = runner if runner is not None else ContextBuilderRunner()
         self._store: InvestigationStore = store if store is not None else default_store()
         self._max_iterations: int = max_iterations
-        self._executor: _BackgroundExecutor = _BackgroundExecutor()
+        # Story 7-4: optional durable-store resume PORT (DI). None (default) → cross-restart resume is
+        # a no-op (the in-process default — no durable store). When injected, resume_incomplete scans
+        # the durable store + resumes incomplete investigations on restart (AD-11 / AD-10 #4).
+        self._resume_source: InvestigationResumer | None = resume_source
+        # ``executor_loop`` (Story 7-4): inject the SAME loop the durable ``conn`` is bound to so the
+        # checkpoint drives + the resume scan share ONE loop (same-loop → robust). None (default) →
+        # the executor creates + owns its own loop (existing in-process behavior).
+        self._executor: _BackgroundExecutor = _BackgroundExecutor(loop=executor_loop)
 
     @property
     def store(self) -> InvestigationStore:
@@ -231,12 +263,18 @@ class Dispatcher:
             # non-silent contract; we do not re-raise into the background task.
             self._store.set_failed(investigation_id)
             return
+        self._apply_result(investigation_id, result)
 
+    def _apply_result(self, investigation_id: str, result: GraphRunnerResult) -> None:
+        """Map a terminal ``GraphRunnerResult`` onto the registry lifecycle status (shared run + resume).
+
+        ``success`` / ``failed`` / ``partial`` are valid terminal lifecycle states (5-2 / 4-A2): the
+        runner's honest ``partial`` (max-iter exhausted) is passed through as ``STATUS_PARTIAL`` — NOT
+        masked as ``failed`` (AD-10 #5). Any OTHER status is a runner contract violation → FAILED.
+        Shared by the fresh-run task (:meth:`_run`) + the resume task (:meth:`_run_resume`) so the
+        terminal mapping is SINGULAR (the dispatcher contract is identical for a fresh + a resumed run).
+        """
         status = result.get("status", STATUS_SUCCESS)
-        # Defensive: success / failed / partial are valid terminal lifecycle states
-        # (5-2 / 4-A2): the runner's honest ``partial`` (max-iter exhausted) is passed
-        # through as ``STATUS_PARTIAL`` — NOT masked as ``failed`` (AD-10 #5). Any OTHER
-        # status is a runner contract violation → FAILED (not silent).
         if status not in (STATUS_SUCCESS, STATUS_FAILED, STATUS_PARTIAL):
             status = STATUS_FAILED
         self._store.set_terminal(
@@ -245,6 +283,26 @@ class Dispatcher:
             result.get("state_snapshot"),
             result.get("report"),
         )
+
+    async def _run_resume(self, investigation_id: str) -> None:
+        """Background RESUME task body (Story 7-4): drive the resumer → update store to terminal.
+
+        The resumer holds the checkpointed runner + resumes WITHOUT a trigger (the checkpoint holds
+        the state). Same terminal mapping as :meth:`_run` (shared via :meth:`_apply_result`).
+        CancelledError leaves the store NON-terminal (re-resumable at-least-once); any other exception
+        → status ``failed`` (NOT silent, AD-10 #5).
+        """
+        assert self._resume_source is not None  # only submitted when a resumer is injected
+        try:
+            result: GraphRunnerResult = await self._resume_source.resume(
+                investigation_id, self._max_iterations
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._store.set_failed(investigation_id)
+            return
+        self._apply_result(investigation_id, result)
 
     def startup_scan(self) -> int:
         """Resume-trigger (AD-10 #4): re-dispatch non-terminal investigations.
@@ -265,6 +323,43 @@ class Dispatcher:
                 record.investigation_id,
                 self._run(record.investigation_id, record.trigger),
             )
+            count += 1
+        return count
+
+    def resume_incomplete(self) -> int:
+        """Cross-restart resume (Story 7-4 — AD-10 #4 / AD-11): resume durable-incomplete investigations.
+
+        The DURABLE analog of :meth:`startup_scan`. Scans the durable checkpoint store (via the injected
+        ``InvestigationResumer`` PORT) for INCOMPLETE investigations (those NOT yet at graph END) and
+        resumes each at-least-once — recovering the trigger from the checkpoint + re-registering the
+        in-process read-store record so the terminal update (``set_terminal``) has a record to write.
+
+        No-op (returns 0) when NO resumer is injected — the in-process default (no durable store). The
+        scan runs the async resumer SYNCHRONOUSLY on the background loop (``run_sync`` — bridges the
+        async durable-store scan to this sync startup caller); the resumes are then scheduled as
+        non-blocking background tasks.
+
+        Idempotent (AD-10 #4): skips any investigation with a live in-flight task (no duplicate spawn)
+        OR a read-store record ALREADY terminal in THIS process (no re-drive). Safe because the
+        investigation is read-only (at-least-once resume has no double-apply side effect — AD-3).
+        """
+        if self._resume_source is None:
+            return 0  # in-process default (no durable store) → cross-restart resume is a no-op
+        pairs = self._executor.run_sync(self._resume_source.incomplete_investigations())
+        count = 0
+        for investigation_id, trigger in pairs:
+            if self._executor.has_inflight(investigation_id):
+                continue  # already resuming → no duplicate spawn (idempotent)
+            existing = self._store.get(investigation_id)
+            if existing is not None and existing.is_terminal:
+                continue  # already resolved in THIS process → no re-drive (idempotent)
+            if existing is None:
+                # restart: the in-process read-store is EMPTY → re-register from the recovered
+                # trigger so ``set_terminal`` (the terminal update) has a record to write. The resume
+                # itself needs NO trigger (the checkpoint holds the state) — the trigger is for the
+                # read-store record's consistency with the original dispatch.
+                self._store.register_running(investigation_id, trigger)
+            self._executor.submit(investigation_id, self._run_resume(investigation_id))
             count += 1
         return count
 
@@ -311,6 +406,17 @@ def startup_scan() -> int:
     return default_dispatcher().startup_scan()
 
 
+def resume_incomplete() -> int:
+    """Convenience: run the default dispatcher's cross-restart resume scan (Story 7-4).
+
+    No-op (returns 0) unless the composition root injected a durable-store
+    ``InvestigationResumer`` into the default dispatcher (``set_default_dispatcher`` /
+    routers wiring). Called at process startup to resume durable-incomplete
+    investigations at-least-once (AD-10 #4 / AD-11).
+    """
+    return default_dispatcher().resume_incomplete()
+
+
 def reset_dispatcher() -> None:
     """Test isolation: cancel in-flight tasks + clear the default store."""
     dispatcher = default_dispatcher()
@@ -324,6 +430,7 @@ __all__ = [
     "default_dispatcher",
     "dispatch",
     "reset_dispatcher",
+    "resume_incomplete",
     "set_default_dispatcher",
     "startup_scan",
 ]
