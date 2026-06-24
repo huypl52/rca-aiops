@@ -32,10 +32,14 @@ LOCKED MECHANISM (do NOT redesign — defer only summarizer CONTENT):
          (defensive precedence chain). If none resolve to a non-empty str → DROP.
        - ``query`` (required) ← ``tool_call["query"]`` (the canonical identifying-kwargs string EXR recorded —
          "what was asked"). Pass-through; non-str/empty → DROP.
-       - ``timestamp_range`` (required) ← ``raw["time_window"]`` (the structured ``{start, end}`` the executor
-         echoes — the canonical time window that produced this evidence). ``start`` MUST be a non-empty ISO
-         str; ``end`` nullable (str | None). Missing/invalid → DROP. (The EXR record's ``timestamp_range`` is a
-         canonical-JSON DEDUPE string, NOT the structured window — ``raw["time_window"]`` is the source of truth.)
+       - ``timestamp_range`` (required) ← LOCKED precedence: ``raw["time_window"]`` (the tool's OWN query
+         window — the structured ``{start, end}`` windowed tools [prometheus/loki] echo; the window the query
+         actually covered — most precise) → ``state.context["time_window"]`` (the ICB-built INCIDENT window —
+         the window during which this evidence was collected; the honest fallback for point-in-time/static
+         tools [k8s_*, search_playbook, topology_read] whose raw carries NO query window) → ``None`` (DROP only
+         when BOTH are absent/invalid). The SAME validation applies to both (``start`` non-empty ISO str; ``end``
+         nullable). This is NOT guessing — ``context["time_window"]`` is the real incident window. (The EXR
+         record's ``timestamp_range`` is a canonical-JSON DEDUPE string, NOT a structured window — never used.)
        - ``summary`` (required) ← ``summarizer(raw, source_type, query)`` (the injected deterministic seam).
          non-str/empty → DROP.
        - ``raw_excerpt`` (optional-nullable, NON-NULL here) ← a deterministic bounded JSON serialization of
@@ -145,23 +149,49 @@ def _resolve_source_name(raw: Mapping[str, object], context: Mapping[str, object
     return None
 
 
-def _timestamp_range_from_raw(raw: Mapping[str, object]) -> dict[str, JsonValue] | None:
-    """Derive the Evidence ``timestamp_range`` ``{start, end}`` from ``raw["time_window"]`` (single source).
+def _valid_window(window: object) -> dict[str, JsonValue] | None:
+    """Validate + project a time window ``{start, end?}`` to the Evidence ``timestamp_range`` shape.
 
     ``start`` MUST be a non-empty ISO str (TimestampRange required non-null); ``end`` is nullable
-    (``str | None`` — None while the incident is still firing). Returns None when raw carries no valid time
-    window → the candidate is DROPPED (AC4 — never guessed). The EXR record's ``timestamp_range`` is a
-    canonical-JSON DEDUPE string, NOT the structured window — ``raw["time_window"]`` is the source of truth.
+    (``str | None`` — None while the incident is still firing). Returns None when the window is
+    absent/invalid (non-Mapping / ``start`` missing-or-non-str-or-empty) so the caller can try the next
+    precedence source. Applied UNIFORMLY to every candidate window (raw's own + the incident window).
     """
-    time_window = raw.get("time_window")
-    if not isinstance(time_window, Mapping):
+    if not isinstance(window, Mapping):
         return None
-    start = time_window.get("start")
+    start = window.get("start")
     if not isinstance(start, str) or not start:
         return None
-    end = time_window.get("end")
+    end = window.get("end")
     end_value: JsonValue = end if isinstance(end, str) else None
     return {"start": start, "end": end_value}
+
+
+def _resolve_timestamp_range(
+    raw: Mapping[str, object], context: Mapping[str, object]
+) -> dict[str, JsonValue] | None:
+    """Derive the Evidence ``timestamp_range`` ``{start, end}`` via LOCKED precedence.
+
+    Precedence (most-precise first):
+      1. ``raw["time_window"]`` — the tool's OWN query window (echoed by windowed tools: prometheus/loki;
+         the window the query actually covered — most precise).
+      2. ``state.context["time_window"]`` — the ICB-built INCIDENT window ``{start, end}``
+         (``incident_context_builder`` — the window during which this evidence was collected). The honest
+         fallback for point-in-time / static tools (k8s_*, search_playbook, topology_read) whose raw carries
+         NO query window — without it those tool types would be SILENTLY DROPPED (leader BLOCKER B1: 6/8 real
+         stubs were dropped; the k8s/topology/playbook evidence IS the core root-cause signal).
+      3. ``None`` → DROP (only when BOTH windows are absent/invalid).
+
+    The SAME validation (:func:`_valid_window`) applies to both candidate windows (``start`` non-empty ISO
+    str; ``end`` nullable). This is NOT guessing — ``context["time_window"]`` is the real incident window.
+    The EXR record's ``timestamp_range`` is a canonical-JSON DEDUPE STRING, NOT a structured window (never
+    used here).
+    """
+    for candidate in (raw.get("time_window"), context.get("time_window")):
+        window = _valid_window(candidate)
+        if window is not None:
+            return window
+    return None
 
 
 def _raw_excerpt(raw: Mapping[str, object]) -> str:
@@ -183,7 +213,8 @@ def build_evidence_normalizer(
       - reads ``state["tool_calls"]`` (already-dispatched records) + ``state["context"]`` defensively;
       - for EACH record, derives the 9 Evidence fields per the LOCKED precedence (§3), building a candidate
         dict; a record whose raw misses a REQUIRED field (source_type / resolvable source_name / query /
-        valid time_window) is DROPPED (AC4 — never guessed);
+        a valid window — raw's OWN ``time_window`` OR the incident ``context["time_window"]``) is DROPPED
+        (AC4 — never guessed);
       - validates the candidate AT THE PORT (``Evidence.model_validate`` — AD-9; ``extra="forbid"``); ANY
         failure or raised exception → DROP that candidate (Constraint 5 — never raise);
       - returns AD-4 partial state ``{"evidence": [valid_model_dump_dicts, ...]}``.
@@ -221,7 +252,7 @@ def build_evidence_normalizer(
             query = record.get("query")
             if not isinstance(query, str) or not query:
                 continue
-            timestamp_range = _timestamp_range_from_raw(raw)
+            timestamp_range = _resolve_timestamp_range(raw, context)
             if timestamp_range is None:
                 continue
 

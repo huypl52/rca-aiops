@@ -48,6 +48,14 @@ _EVIDENCE_FIELDS = frozenset(
     Evidence.model_fields.keys()
 )  # the 9 §3.6 fields (spec source of truth)
 
+# The ICB-built incident window — EVERY real state carries context["time_window"] (incident_context_builder).
+# Used as the timestamp_range fallback for point-in-time/static tools whose raw carries NO query window
+# (leader BLOCKER B1: k8s_*, search_playbook, topology_read must survive via this honest fallback).
+_INCIDENT_WINDOW: dict[str, object] = {
+    "start": "2026-06-24T00:00:00Z",
+    "end": "2026-06-24T01:00:00Z",
+}
+
 
 # ---------------------------------------------------------------------------
 # helpers — build a realistic DISPATCHED tool_call record + a state carrying it
@@ -83,12 +91,25 @@ def _record(raw: Mapping[str, object], **overrides: object) -> dict[str, object]
 
 
 def _state(
-    records: list[dict[str, object]], *, service: str | None = "checkout"
+    records: list[dict[str, object]],
+    *,
+    service: str | None = "checkout",
+    context_window: Mapping[str, object] | None = _INCIDENT_WINDOW,
 ) -> InvestigationState:
-    """A state seeded with tool_calls + context (context carries the source_name fallback of last resort)."""
+    """A state seeded with tool_calls + context.
+
+    The context carries the source_name fallback of last resort (``service``) AND, by default, the ICB-built
+    incident window (``time_window``) — the timestamp_range fallback for non-windowed tools (BLOCKER B1). Pass
+    ``context_window=None`` to model a context with NO incident window (used to assert the both-absent DROP).
+    """
     state = create_initial_state()
     state["tool_calls"] = cast(list[dict[str, JsonValue]], records)
-    state["context"] = {"service": service} if service is not None else {}
+    context: dict[str, object] = {}
+    if service is not None:
+        context["service"] = service
+    if context_window is not None:
+        context["time_window"] = context_window
+    state["context"] = cast(dict[str, JsonValue], context)
     return state
 
 
@@ -138,7 +159,6 @@ def test_normalizes_dispatched_tool_call_to_tiered_evidence() -> None:
             {
                 "source_type": "kubernetes",
                 "source_name": "checkout-pod-0",
-                "time_window": {"start": "s"},
                 "pods": [{"name": "x"}],
             },
             "checkout-pod-0",
@@ -147,7 +167,6 @@ def test_normalizes_dispatched_tool_call_to_tiered_evidence() -> None:
             {
                 "source_type": "topology",
                 "service": "billing",
-                "time_window": {"start": "s"},
                 "services": ["billing"],
             },
             "billing",
@@ -155,7 +174,11 @@ def test_normalizes_dispatched_tool_call_to_tiered_evidence() -> None:
     ],
 )
 def test_source_name_precedence_chain(raw: dict[str, object], expected_source_name: str) -> None:
-    """AC1/§2.3: source_name resolves raw["source_name"] → raw["service"] → context["service"]."""
+    """AC1/§2.3: source_name resolves raw["source_name"] → raw["service"] → context["service"].
+
+    k8s/topology raws carry NO query window (real stubs); they survive the timestamp_range gate via the
+    context incident-window fallback (BLOCKER B1) — no synthetic time_window injected here.
+    """
     evidence = _normalize(_state([_record(raw)]))
     assert evidence[0]["source_name"] == expected_source_name
 
@@ -239,11 +262,13 @@ def test_source_name_unresolvable_is_dropped() -> None:
     assert _normalize(_state([_record(raw)], service=None)) == []
 
 
-def test_raw_missing_time_window_is_dropped() -> None:
-    """AC4: a raw without a valid time_window → no timestamp_range → DROP (never guessed)."""
+def test_no_window_anywhere_is_dropped() -> None:
+    """AC4 / BLOCKER B1: a raw WITHOUT its own window AND a context WITHOUT an incident window → DROP.
+    (The incident-window fallback is tried first; only when BOTH windows are absent/invalid is the
+    candidate dropped — never guessed.)"""
     raw = _raw()
     del raw["time_window"]
-    assert _normalize(_state([_record(raw)])) == []
+    assert _normalize(_state([_record(raw)], context_window=None)) == []
 
 
 def test_record_missing_query_is_dropped() -> None:
@@ -251,6 +276,49 @@ def test_record_missing_query_is_dropped() -> None:
     record = _record(_raw())
     del record["query"]
     assert _normalize(_state([record])) == []
+
+
+# ---------------------------------------------------------------------------
+# timestamp_range precedence (BLOCKER B1) — raw window → incident window → DROP
+# ---------------------------------------------------------------------------
+
+
+def test_raw_own_window_wins_over_incident_window() -> None:
+    """BLOCKER B1: when raw carries its OWN window, that (more-precise) window is used — NOT the incident
+    window (precedence source #1 wins)."""
+    raw = _raw()  # raw time_window = {00:00, 01:00}
+    narrower = {"start": "2026-06-24T00:30:00Z", "end": "2026-06-24T00:45:00Z"}
+    ev = _normalize(_state([_record(raw)], context_window=narrower))[0]
+    assert ev["timestamp_range"] == {
+        "start": "2026-06-24T00:00:00Z",
+        "end": "2026-06-24T01:00:00Z",
+    }  # raw's window, not the context's narrower one
+
+
+def test_incident_window_fallback_when_raw_has_none() -> None:
+    """BLOCKER B1: a raw WITHOUT its own window (k8s_*/playbook/topology) falls back to the ICB incident
+    window → SURVIVES (was SILENTLY DROPPED before the fix)."""
+    raw = _raw()
+    del raw["time_window"]  # simulate a point-in-time/static tool (no query window)
+    ev = _normalize(_state([_record(raw)]))[0]
+    assert ev["timestamp_range"] == _INCIDENT_WINDOW  # the incident window fallback
+
+
+def test_incident_window_nullable_end_preserved() -> None:
+    """BLOCKER B1: a still-firing incident (end=None) propagates end=None through the fallback honestly."""
+    raw = _raw()
+    del raw["time_window"]
+    ev = _normalize(
+        _state([_record(raw)], context_window={"start": "2026-06-24T00:00:00Z", "end": None})
+    )[0]
+    assert ev["timestamp_range"] == {"start": "2026-06-24T00:00:00Z", "end": None}
+
+
+def test_invalid_raw_window_falls_back_to_incident_window() -> None:
+    """BLOCKER B1: an INVALID raw window (start empty/non-str) is skipped → incident window used (not guessed)."""
+    raw = _raw(time_window={"start": "", "end": "2026-06-24T01:00:00Z"})  # empty start → invalid
+    ev = _normalize(_state([_record(raw)]))[0]
+    assert ev["timestamp_range"] == _INCIDENT_WINDOW  # fallback, not the invalid raw window
 
 
 @pytest.mark.parametrize("bad_raw", ["a-string", 42, None, ["a", "list"]])
