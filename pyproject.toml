@@ -13,6 +13,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite==3.1.0",
     "fastapi==0.138.0",
     "uvicorn==0.49.0",
+    "httpx==0.28.1",  # 7.1: declared (was transitive) — the demo microservices' create_app makes live inter-service calls via httpx.
     "pydantic==2.13.4",
     "pyyaml==6.0.3",  # 4-A1: declared (was transitive) — the reflector composition root loads config/floor_registry.yaml.
     "qdrant-client==1.18.0",
@@ -58,7 +59,9 @@ select = ["E", "F", "I", "UP", "W"]
 ignore = ["E501"]  # line-length enforced by formatter
 
 [tool.ruff.lint.isort]
-known-first-party = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "config", "ci"]
+# `demo` is the standalone SYSTEM-UNDER-INVESTIGATION (Story 7.1), a first-party package
+# in this workspace (but NOT an agent layer — it ships in no agent contract/wheel).
+known-first-party = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "config", "ci", "demo"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -97,7 +100,18 @@ addopts = "-ra --strict-markers"
 # import-linter (CI gate #2 — dependency-direction HARD-FAIL, AD-13 #2 / AD-1)
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["routers", "services", "graph", "adapters", "tools"]
+# `demo` (Story 7.1) is a root package so import-linter can discover + contract-check it
+# (it is NOT installed into the venv — not a hatch wheel package — so it must be listed
+# here to be analyzed). The layers contract below is UNCHANGED and does not name `demo`;
+# the `forbidden` contract enforces the demo→agent boundary independently.
+root_packages = ["routers", "services", "graph", "adapters", "tools", "demo"]
+# include_external_packages — the `forbidden` contract lists agent packages (models/eval/
+# ci/config) that are NOT root_packages; import-linter treats them as "external" and would
+# otherwise be BLIND to a `demo → models` import (the boundary would be hollow). This flag
+# pulls external packages into the import graph so the forbidden contract can actually
+# catch a demo→agent coupling. The `layers` contract is unaffected (it only constrains the
+# direction BETWEEN the 5 named layers; imports to non-layer packages stay unconstrained).
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "One-way layered architecture (AD-1 / AD-2)"
@@ -113,3 +127,16 @@ layers = [
 # routers(0) → services/graph/adapters/tools ; tools(4) → nothing.
 # This forbids back-edges: adapters↛graph, adapters↛services, tools↛graph, tools↛services, graph↛routers.
 # Circular imports = fail. Enforced HARD-FAIL in CI.
+
+[[tool.importlinter.contracts]]
+# Story 7.1 — DEMO-vs-AGENT BOUNDARY (the headline constraint of this story).
+# `demo` is the standalone SYSTEM-UNDER-INVESTIGATION (the 5 microservices the RCA agent
+# investigates at runtime); it must NOT import/couple to any RCA-agent module. The linear
+# `layers` contract above can't express "demo is independent of all agent layers", so a
+# separate `forbidden` contract enforces it: no `demo` module may import any agent module.
+# Proven HARD-FAIL by the negative self-test tests/ci/test_gate2_demo_boundary.py (mirrors
+# test_gate2_deps.py). The agent never imports demo either (no reverse contract needed).
+name = "Demo never imports RCA-agent code (Story 7.1 boundary)"
+type = "forbidden"
+source_modules = ["demo"]
+forbidden_modules = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "ci", "config"]

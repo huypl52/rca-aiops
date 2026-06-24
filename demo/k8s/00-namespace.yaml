@@ -1,0 +1,8 @@
+# demo/k8s/00-namespace.yaml — the single POC tenant (Story 7.1).
+# Multi-tenant = prod D10 — OUT of scope (single-tenant namespace `demo`).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    demo.rca/tenant: single

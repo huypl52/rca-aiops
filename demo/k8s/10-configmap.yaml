@@ -1,0 +1,16 @@
+# demo/k8s/10-configmap.yaml — shared demo config (Story 7.1).
+# Inter-service base URLs use K8s Service DNS (port 80). The keys match the env
+# derivation in demo/app/factory.py::_upstream_base: DEMO_UPSTREAM_<NAME_UPPER>
+# where hyphens → underscores (api-gateway → DEMO_UPSTREAM_API_GATEWAY).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-config
+  namespace: demo
+data:
+  DEMO_UPSTREAM_API_GATEWAY: "http://api-gateway"
+  DEMO_UPSTREAM_USER: "http://user"
+  DEMO_UPSTREAM_ORDER: "http://order"
+  DEMO_UPSTREAM_INVENTORY: "http://inventory"
+  DEMO_UPSTREAM_PAYMENT: "http://payment"
+  DEMO_TRAFFIC_SEED: "42"

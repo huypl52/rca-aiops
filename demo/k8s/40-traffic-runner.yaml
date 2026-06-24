@@ -1,0 +1,34 @@
+# demo/k8s/40-traffic-runner.yaml — the deterministic "normal traffic" driver (Story 7.1).
+#
+# Runs demo.runner in a shell-paced loop so the demo system continuously emits the
+# seed-reproducible metrics/logs the observability stack (Story 7.2) collects. The
+# REQUEST PATTERN is deterministic (seed 42); only the pacing (sleep) lives here —
+# the runner module itself is wall-clock-free (AD-12 analog).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-runner
+  namespace: demo
+  labels: { demo.rca/service: traffic-runner }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: traffic-runner } }
+  template:
+    metadata:
+      labels: { demo.rca/service: traffic-runner }
+    spec:
+      containers:
+        - name: runner
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: PYTHONHASHSEED, value: "42" }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                python -m demo.runner --seed 42 --n 200 || true
+                sleep 5
+              done
+          resources: { requests: { cpu: 25m, memory: 32Mi }, limits: { cpu: 100m, memory: 128Mi } }

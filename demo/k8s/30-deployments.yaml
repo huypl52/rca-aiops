@@ -1,0 +1,157 @@
+# demo/k8s/30-deployments.yaml — the 5 demo microservice Deployments (Story 7.1).
+#
+# All 5 use the SAME image (demo/app:latest, built once from demo/Dockerfile); the
+# service is selected per-Deployment via DEMO_MODULE (the uvicorn target module)
+# and DEMO_PORT. imagePullPolicy: Never — the image is `kind load`-ed locally, not
+# pulled from a registry.
+#
+# POD LABEL NOTE (forward-compat for Story 7.3 chaos/k8s-adapter queries): the
+# `app` label uses the spec §3.7 label_selector forms (eval/scenarios.py queries
+# `app=order-service`, `app=payment-service`, …) — so a 7.3 fault can target pods
+# by the same selector the benchmark injects. The `demo.rca/service` label carries
+# the short name (matches the Service selector + topology).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: demo
+  labels: { demo.rca/service: api-gateway }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: api-gateway } }
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        demo.rca/service: api-gateway
+    spec:
+      containers:
+        - name: app
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: DEMO_MODULE, value: api_gateway }
+            - { name: DEMO_PORT, value: "8080" }
+            - { name: PYTHONHASHSEED, value: "42" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, initialDelaySeconds: 2, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user
+  namespace: demo
+  labels: { demo.rca/service: user }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: user } }
+  template:
+    metadata:
+      labels:
+        app: user-service
+        demo.rca/service: user
+    spec:
+      containers:
+        - name: app
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: DEMO_MODULE, value: user }
+            - { name: DEMO_PORT, value: "8081" }
+            - { name: PYTHONHASHSEED, value: "42" }
+          ports: [{ containerPort: 8081 }]
+          readinessProbe: { httpGet: { path: /health, port: 8081 }, initialDelaySeconds: 2, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8081 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order
+  namespace: demo
+  labels: { demo.rca/service: order }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: order } }
+  template:
+    metadata:
+      labels:
+        app: order-service
+        demo.rca/service: order
+    spec:
+      containers:
+        - name: app
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: DEMO_MODULE, value: order }
+            - { name: DEMO_PORT, value: "8082" }
+            - { name: PYTHONHASHSEED, value: "42" }
+          ports: [{ containerPort: 8082 }]
+          readinessProbe: { httpGet: { path: /health, port: 8082 }, initialDelaySeconds: 2, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8082 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory
+  namespace: demo
+  labels: { demo.rca/service: inventory }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: inventory } }
+  template:
+    metadata:
+      labels:
+        app: inventory
+        demo.rca/service: inventory
+    spec:
+      containers:
+        - name: app
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: DEMO_MODULE, value: inventory }
+            - { name: DEMO_PORT, value: "8083" }
+            - { name: PYTHONHASHSEED, value: "42" }
+          ports: [{ containerPort: 8083 }]
+          readinessProbe: { httpGet: { path: /health, port: 8083 }, initialDelaySeconds: 2, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8083 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment
+  namespace: demo
+  labels: { demo.rca/service: payment }
+spec:
+  replicas: 1
+  selector: { matchLabels: { demo.rca/service: payment } }
+  template:
+    metadata:
+      labels:
+        app: payment-service
+        demo.rca/service: payment
+    spec:
+      containers:
+        - name: app
+          image: demo/app:latest
+          imagePullPolicy: Never
+          envFrom: [{ configMapRef: { name: demo-config } }]
+          env:
+            - { name: DEMO_MODULE, value: payment }
+            - { name: DEMO_PORT, value: "8084" }
+            - { name: PYTHONHASHSEED, value: "42" }
+          ports: [{ containerPort: 8084 }]
+          readinessProbe: { httpGet: { path: /health, port: 8084 }, initialDelaySeconds: 2, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8084 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }
