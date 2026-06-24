@@ -396,6 +396,7 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     """
     # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.nodes same layer). Kept inside this
     # composition root so build_compiled_graph / CompiledGraphRunner / stubs stay tools-free (§2.7).
+    from graph.nodes.evidence_normalizer import build_evidence_normalizer
     from graph.nodes.executor_router import build_executor_router_node
     from graph.nodes.hypothesis_planner import build_hypothesis_planner
     from graph.nodes.incident_context_builder import incident_context_builder
@@ -418,6 +419,9 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
         hypothesis_planner=hypothesis_planner,
         plan_validator=build_plan_validator(),
         executor_router=build_executor_router_node(router=router),
+        # 4-2: the REAL evidence_normalizer (was the 3-5 DEFERRED stub). The stub stays the DI-param
+        # default (a no-op ENV is a valid test/composition choice — floor_check-stub discipline).
+        evidence_normalizer=build_evidence_normalizer(),
     )
     return CompiledGraphRunner(graph)
 
