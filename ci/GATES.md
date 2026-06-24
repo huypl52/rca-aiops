@@ -11,7 +11,7 @@ blocks merge, no opt-out, no `continue-on-error`.
 | 3 | Type-coherence 2-tier round-trip | AD-9 | **WIRED** ✓ | Story 0.3 | `pytest tests/ci/test_gate3_type_coherence.py` |
 | 4 | Floor determinism (pure-function + registry schema) | AD-12, DEC-3 | **WIRED** ✓ | Story 4.1 (mechanism) | `pytest tests/ci/test_gate4_floor_determinism.py` |
 | 5 | Contract schema preservation (18/9-field no drift) | AD-6 | **WIRED** ✓ | Story 0.2 | `pytest tests/ci/test_gate5_contract_schema.py` |
-| 6 | Benchmark determinism (11-scenario inject + full-agent conjunction) | FR-10, AD-13 #6 | **DETERMINISM WIRED** ✓ (scoring → 6.3/6.4) | Story 6.1 + 6.2 | `tests/ci/test_gate6_*determinism.py` |
+| 6 | Benchmark determinism (11-scenario inject + full-agent conjunction + graded scoring) | FR-10, AD-13 #6 | **DETERMINISM WIRED** ✓ (conjunction + scoring done; SM-4 → 6.4) | Story 6.1 + 6.2 + 6.3 | `tests/ci/test_gate6_*determinism.py` |
 
 ## Gate #1 — read-only registry (AD-3 BLOCKER)
 
@@ -114,7 +114,7 @@ anti-hallucination SM-3, playbook SM-4) are honestly DEFERRED (the 4-A3 pattern 
 lie). A green gate #6 means "the benchmark RUNS + is DETERMINISTIC across `PYTHONHASHSEED`", NOT "the
 agent passes the scoring".
 
-- **Bind:** `uv run pytest tests/ci/test_gate6_benchmark_determinism.py tests/ci/test_gate6_conjunction_determinism.py -v`.
+- **Bind:** `uv run pytest tests/ci/test_gate6_benchmark_determinism.py tests/ci/test_gate6_conjunction_determinism.py tests/ci/test_gate6_scoring_determinism.py -v`.
 - **(a) Inject determinism (Story 6.1):** the 11-scenario canned inject → REAL adapter → REAL
   evidence_normalizer produces a byte-identical Evidence symptom blob across `PYTHONHASHSEED={0,1,42}`
   (decisive cross-process proof — spawns `python -m tests.eval_harness` under several seeds).
@@ -123,10 +123,19 @@ agent passes the scoring".
   (SM-1 + SM-2 + per-scenario terminal spine) across `PYTHONHASHSEED={0,1,42}` (§2F — spawns
   `python -m tests.conjunction_harness`). The terminal-state spine is the payload: byte-stability proves
   the WHOLE compiled-graph output is hash-seed-stable.
-- **Boundary (6.2 extends):** gate #6 asserts the conjunction RUNS + is DETERMINISTIC. It does NOT assert
-  `SM-1 ≥ threshold` (D4 — confidence/SM cutoffs defer) NOR the scoring PASS — the honest baseline is
-  `SM-1 = 0%` (the graph does not converge, 5-A1; fixing that is a SEPARATE story) + `SM-2` blocked (no
-  reports). The scoring PASS + cutoffs land at 6.3/6.4.
-- **Negative:** both tests have an `EVAL_GATE6_NEGATIVE` hook that weaves set-iteration order
+- **(c) Graded-scoring determinism (Story 6.3):** the GRADED SCORING LAYER ABOVE the conjunction
+  (partial-credit `coverage_{a..e}` floats + tolerance window + anti-hallucination SM-3) computed over all
+  11 produces a byte-identical scoring blob across `PYTHONHASHSEED={0,1,42}` (§2D — spawns
+  `python -m tests.scoring_harness`). Coverage = set-membership fractions, SM-3 = token containment,
+  tolerance = `abs()` — all hash-seed-independent; canonical JSON. Byte-stability proves the WHOLE graded
+  computation is hash-seed-stable.
+- **Boundary (6.3 extends):** gate #6 asserts the inject + conjunction + graded-scoring axes RUN + are
+  DETERMINISTIC. It does NOT assert `SM-1 ≥ threshold`, `coverage ≥ threshold`, `SM-3 ≥ threshold`, NOR a
+  tolerance PASS (D4 — confidence/SM/tolerance cutoffs defer) — the honest baselines are `SM-1 = 0%` (the
+  graph does not converge, 5-A1; fixing that is a SEPARATE story, R1), `SM-2` blocked (no reports), graded
+  `coverage = {a≈1.0, b=1.0, c=0, d=0, e=0}`, SM-3 evidence-layer 100% (the pipeline) / report-layer
+  `blocked`. The graded PASS + cutoffs land at 6.4/convergence (R2 — partial-credit is a SEPARATE
+  supplementary axis, never a back-door pass).
+- **Negative:** all three tests have an `EVAL_GATE6_NEGATIVE` hook that weaves set-iteration order
   (PYTHONHASHSEED-dependent) into the blob → the cross-seed blobs DIFFER → the determinism assertion has
   teeth (not tautological).
