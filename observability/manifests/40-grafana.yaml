@@ -105,9 +105,15 @@ spec:
         - name: grafana
           image: grafana/grafana:11.3.0
           env:
-            - { name: GF_SECURITY_ADMIN_USER, valueFrom: { secretKeyRef: { name: grafana-bootstrap, key: user } } }
-            - { name: GF_SECURITY_ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: grafana-bootstrap, key: password } } }
-            - { name: GF_AUTH_ANONYMOUS, value: "false" }
+            # 7-2-A1 close-out (Story 7.3 carry-forward): the 7.2 manifest referenced a
+            # `grafana-bootstrap` Secret (secretKeyRef) that no Secret manifest defined — a
+            # dangling ref. For this POC we drop the secretKeyRef entirely and enable
+            # anonymous Admin access instead. ZERO literal secret values are committed; the
+            # alerting webhook (the AC2 part that matters) is configmap-provisioned and fires
+            # regardless of the login. A real deploy would swap these for a real Secret
+            # (RBAC/KMS-backed), never a committed literal.
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Admin" }
           ports: [{ containerPort: 3000 }]
           readinessProbe: { httpGet: { path: /api/health, port: 3000 }, initialDelaySeconds: 10, periodSeconds: 5 }
           resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }

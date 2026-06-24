@@ -1,0 +1,71 @@
+# deploy/k8s/00-rca-backend.yaml — the RCA backend (the agent) deployed as a Service.
+#
+# AC2 (Story 7.3): deploy the RCA backend (FastAPI routers/ + LangGraph graph/) as Service
+# `rca-backend` (port 8000) — the URL the 7.2 trigger sources target
+# (http://rca-backend.rca.svc.cluster.local:8000 — grafana contact point, prometheus scrape
+# target, event-watcher default ingest URL).
+#
+# NAMESPACE = rca (reconciliation, recorded in the Story 7.3 CS): the dispatch named
+# "namespace demo", but every 7.2 trigger-source URL resolves `rca-backend` in `rca`
+# (rca-backend.rca.svc.cluster.local). Deploying in `rca` keeps the existing wiring consistent;
+# deploying in `demo` would have left those URLs dangling. The agent is a service separate from
+# the demo SUT (ns demo) and the observability stack (ns observability), so a dedicated `rca`
+# namespace is architecturally clean too.
+#
+# RBAC (CS Q3): NONE now. The deployed backend's default dispatcher (ContextBuilderRunner) +
+# canned transport (FakeReadOnlyTransport / StubReadOnlyAdapter) make NO cluster API calls — it
+# reads nothing from K8s. The ServiceAccount therefore carries NO ClusterRole (least privilege).
+# Read-only get/list/watch RBAC (mirroring the 7.2 observability ClusterRole) lands with the
+# 5-A1 real-transport — NOT granted speculatively here.
+#
+# HONEST OUTPUT (AC2): POST a trigger -> 202 InvestigationAccepted -> poll
+# /api/investigations/{id} -> status="success" (single-node ContextBuilderRunner), report=None.
+# NO green RCA is manufactured (graph non-convergent until 5-A1; SqliteSaver is 7.4). The deploy
+# proves WIRING, not working RCA.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rca
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rca-backend
+  namespace: rca
+  # No ClusterRoleBinding: the backend reads nothing from the cluster today (canned transport).
+  # get/list/watch read-only RBAC (mirroring observability/manifests/00-namespace-rbac.yaml) is
+  # added with the 5-A1 real-transport — not before.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-backend
+  namespace: rca
+  labels: { app.kubernetes.io/name: rca-backend }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: rca-backend } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: rca-backend }
+    spec:
+      serviceAccountName: rca-backend
+      containers:
+        - name: rca-backend
+          image: rca-backend:7.3
+          ports: [{ containerPort: 8000 }]
+          # TCP-socket probes: the backend has no GET /health (only POST ingest + GET
+          # /api/investigations/{id}); a TCP probe proves the pod is listening on 8000.
+          readinessProbe: { tcpSocket: { port: 8000 }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { tcpSocket: { port: 8000 }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rca-backend
+  namespace: rca
+spec:
+  selector: { app.kubernetes.io/name: rca-backend }
+  ports: [{ name: http, port: 8000, targetPort: 8000 }]

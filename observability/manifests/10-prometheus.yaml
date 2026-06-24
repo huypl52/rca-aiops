@@ -26,24 +26,23 @@ data:
         - static_configs:
             - targets: [alertmanager.observability.svc.cluster.local:9093]
     scrape_configs:
-      # The 5 demo SUT services — /metrics comes from the 7.1 deterministic render_prometheus.
+      # The 5 demo SUT services — /metrics comes from the 7.1 deterministic render_prometheus
+      # (each FastAPI service exposes GET /metrics, demo/app/factory.py). The demo Services are
+      # ClusterIP port 80 → containerPort 8080..8084 (demo/k8s/20-services.yaml). Carry-forward
+      # fix (7.2 had a single-host `replacement: demo` relabel with no port): per-service static
+      # targets name each demo Service by DNS. The metric EXPOSITION already carries the `service`
+      # label (render_prometheus labels service/operation/target), so no static `service` label is
+      # added (avoids an honor_labels conflict) — the rules' `sum by (service)` resolves from the
+      # scraped series, not the target.
       - job_name: demo-services
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces: { names: [demo] }
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_demo_rca_service]
-            regex: .+
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_label_demo_rca_service]
-            target_label: service
-          - target_label: __address__
-            replacement: demo  # resolved per-pod via the service label below
-          - source_labels: [service]
-            target_label: __metrics_path__
-            replacement: /metrics
-        # NOTE: for a deterministic POC, also expose static targets of the 5 demo Services
-        # (demo/api-gateway, demo/user, demo/order, demo/inventory, demo/payment :80 /metrics).
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - api-gateway.demo.svc.cluster.local:80
+              - user.demo.svc.cluster.local:80
+              - order.demo.svc.cluster.local:80
+              - inventory.demo.svc.cluster.local:80
+              - payment.demo.svc.cluster.local:80
       - job_name: rca-backend
         static_configs:
           - targets: [rca-backend.rca.svc.cluster.local:8000]  # deployed Story 7.3
@@ -73,6 +72,23 @@ data:
             for: 2m
             labels: { severity: warning, scenario: latency_spike }
             annotations: { summary: "downstream latency elevated", description: "request volume anomaly" }
+          # --- coverage hand-off close-out (Story 7.3): the 2 prometheus rules 7.2 omitted.
+          # Both are PROD-ONLY (eval/scenarios.py A8: disk + memory are trustworthy only
+          # multi-node). The demo SUT's single-node service-metric exposition (render_prometheus)
+          # does NOT emit node_exporter / cAdvisor resource series, so these rules cannot fire
+          # against demo — they complete the detection RULES surface for a prod deploy. The POC
+          # proves the chaos→trigger→canonical path IN-PROCESS (tests/test_chaos_inject.py), not
+          # via a live fire; memory_leak's non-deterministic tolerance window is Story 6.3.
+          - alert: NodeDiskPressure
+            expr: (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) > 0.95
+            for: 2m
+            labels: { severity: critical, scenario: disk_pressure }
+            annotations: { summary: "node disk pressure", description: "node filesystem >95% full, DiskPressure condition" }
+          - alert: MemoryUsageHigh
+            expr: container_memory_working_set_bytes{container!=""} / container_spec_memory_limit_bytes{container!=""} > 0.9
+            for: 2m
+            labels: { severity: critical, scenario: memory_leak }
+            annotations: { summary: "memory usage high", description: "container working-set >90% of the memory limit" }
 ---
 apiVersion: apps/v1
 kind: Deployment
