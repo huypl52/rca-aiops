@@ -1,0 +1,43 @@
+# observability/manifests/60-event-watcher.yaml — the kubernetes_event trigger source (Deployment).
+#
+# TRIGGER SOURCE (Story 7.2 LOCK §3 / AC2): kubernetes_event. The watcher lists Events in
+# the `demo` namespace (BackOff/OOMKilled/DeploymentReplicasNotUpdated — the §3.7
+# crashloopbackoff/oom/bad_deployment_config surfaces) and POSTs each as a valid Story-1.1
+# envelope to POST /api/events/kubernetes (source=kubernetes_event) via
+# observability.event_watcher.forward_events.
+#
+# The runner (observability.event_watcher_runner) is RUNNER GLUE: its image must install
+# BOTH the project's observability package AND the kubernetes client (a RUNTIME dependency,
+# NOT a project build dep — see event_watcher_runner.py). The tested, agent-free core is
+# observability.event_watcher (event_to_ingest_payload + forward_events), exercised by the
+# in-process suite (no cluster needed). The poll cadence (sleep) is infra here, NOT Python
+# module wall-clock, so the package stays wall-clock-free (AD-12). RCA backend = Story 7.3.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-watcher
+  namespace: observability
+  labels: { app.kubernetes.io/name: event-watcher }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: event-watcher } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: event-watcher }
+    spec:
+      serviceAccountName: observability-stack
+      containers:
+        - name: watcher
+          image: observability/event-watcher:latest  # built locally (README runbook); imagePullPolicy Never once kind-loaded
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: DEMO_INGEST_URL, value: "http://rca-backend.rca.svc.cluster.local:8000" }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                python -m observability.event_watcher_runner || true
+                sleep 15
+              done
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 256Mi } }

@@ -1,0 +1,47 @@
+# observability/manifests/00-namespace-rbac.yaml — namespace + RBAC for the read-target stack.
+#
+# The stack lives in its OWN namespace `observability` (it is the observation layer, NOT
+# the SUT — keeps the demo namespace clean and reinforces the 7.1 SUT-vs-observer boundary).
+# It READS FROM the `demo` namespace: Prometheus scrapes demo pod /metrics; Loki/Alloy
+# collect demo pod logs; the event watcher reads demo Events. All of these are the STACK's
+# own reads — the read-only-investigator deny-set (gate #1) binds the AGENT's tools, not
+# this infra layer (Story 7.2 LOCK §2).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels: { demo.rca/component: observability-stack }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: observability-stack
+  namespace: observability
+---
+# ClusterRole: read-only across the demo SUT (pods/services/nodes for scrape + discovery;
+# events for the watcher). NO write verbs anywhere — the stack only READS.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: observability-read-demo
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "services", "endpoints", "pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observability-stack-read-demo
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: observability-read-demo }
+subjects:
+  - kind: ServiceAccount
+    name: observability-stack
+    namespace: observability

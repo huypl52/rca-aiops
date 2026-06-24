@@ -59,9 +59,10 @@ select = ["E", "F", "I", "UP", "W"]
 ignore = ["E501"]  # line-length enforced by formatter
 
 [tool.ruff.lint.isort]
-# `demo` is the standalone SYSTEM-UNDER-INVESTIGATION (Story 7.1), a first-party package
-# in this workspace (but NOT an agent layer — it ships in no agent contract/wheel).
-known-first-party = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "config", "ci", "demo"]
+# `demo` (Story 7.1, the standalone SUT) and `observability` (Story 7.2, the read-target
+# observation layer) are first-party packages in this workspace (NOT agent layers — neither
+# ships in an agent contract/wheel).
+known-first-party = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "config", "ci", "demo", "observability"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -100,11 +101,11 @@ addopts = "-ra --strict-markers"
 # import-linter (CI gate #2 — dependency-direction HARD-FAIL, AD-13 #2 / AD-1)
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-# `demo` (Story 7.1) is a root package so import-linter can discover + contract-check it
-# (it is NOT installed into the venv — not a hatch wheel package — so it must be listed
-# here to be analyzed). The layers contract below is UNCHANGED and does not name `demo`;
-# the `forbidden` contract enforces the demo→agent boundary independently.
-root_packages = ["routers", "services", "graph", "adapters", "tools", "demo"]
+# `demo` (Story 7.1) and `observability` (Story 7.2) are root packages so import-linter can
+# discover + contract-check them (neither is installed into the venv — not a hatch wheel
+# package — so each must be listed here to be analyzed). The layers contract below is
+# UNCHANGED and names neither; the `forbidden` contracts enforce each→agent boundary.
+root_packages = ["routers", "services", "graph", "adapters", "tools", "demo", "observability"]
 # include_external_packages — the `forbidden` contract lists agent packages (models/eval/
 # ci/config) that are NOT root_packages; import-linter treats them as "external" and would
 # otherwise be BLIND to a `demo → models` import (the boundary would be hollow). This flag
@@ -139,4 +140,17 @@ layers = [
 name = "Demo never imports RCA-agent code (Story 7.1 boundary)"
 type = "forbidden"
 source_modules = ["demo"]
+forbidden_modules = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "ci", "config"]
+
+[[tool.importlinter.contracts]]
+# Story 7.2 — OBSERVABILITY-vs-AGENT BOUNDARY (parallel to the 7.1 demo contract, which is
+# left untouched). `observability` is the READ-TARGET observation layer (the stack the agent
+# reads evidence FROM at runtime via its read-only adapters); like `demo` it must NOT
+# import/couple to any RCA-agent module. The linear `layers` contract can't express
+# "observability is independent of all agent layers", so a separate `forbidden` contract
+# enforces it: no `observability` module may import any agent module. Proven HARD-FAIL by
+# the negative self-test tests/ci/test_gate2_observability_boundary.py (mirrors the 7.1 test).
+name = "Observability never imports RCA-agent code (Story 7.2 boundary)"
+type = "forbidden"
+source_modules = ["observability"]
 forbidden_modules = ["routers", "services", "graph", "adapters", "tools", "models", "eval", "ci", "config"]

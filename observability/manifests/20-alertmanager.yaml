@@ -1,0 +1,71 @@
+# observability/manifests/20-alertmanager.yaml — Alertmanager (the prometheus_alertmanager trigger source).
+#
+# TRIGGER SOURCE (Story 7.2 LOCK §3 / AC2): prometheus_alertmanager. Alertmanager receives
+# Prometheus alerts and forwards each to the existing Story-1.1 ingest endpoint via a
+# webhook receiver. This is INFRA/config calling the already-built ingest endpoint — NOT a
+# change to the agent's ingest code (1.1 endpoints are unchanged). The webhook payload is
+# Alertmanager's native alert body, which normalize_prometheus accepts (open envelope,
+# extra=allow) -> valid IncidentTrigger (source=prometheus_alertmanager).
+#
+# The webhook targets the RCA backend Service (deployed Story 7.3); until then the receiver
+# is wired-but-no-sink (a clean hand-off to 7.3).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: observability
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: rca-ingest
+      group_by: [alertname, service]
+      group_wait: 0s
+      group_interval: 10s
+      repeat_interval: 1h
+    receivers:
+      - name: rca-ingest
+        webhook_configs:
+          # Story-1.1 ingest endpoint (source=prometheus_alertmanager). RCA backend = Story 7.3.
+          - url: http://rca-backend.rca.svc.cluster.local:8000/api/alerts/prometheus
+            send_resolved: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: observability
+  labels: { app.kubernetes.io/name: alertmanager }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: alertmanager }
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+          ports: [{ containerPort: 9093 }]
+          readinessProbe: { httpGet: { path: /-/ready, port: 9093 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 250m, memory: 256Mi } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/alertmanager, readOnly: true }
+            - { name: data, mountPath: /alertmanager }
+      volumes:
+        - name: config
+          configMap: { name: alertmanager-config }
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: observability
+spec:
+  selector: { app.kubernetes.io/name: alertmanager }
+  ports: [{ name: http, port: 9093, targetPort: 9093 }]

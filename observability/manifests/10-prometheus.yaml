@@ -1,0 +1,114 @@
+# observability/manifests/10-prometheus.yaml — Prometheus (metric read target) + scrape rules.
+#
+# READ TARGET (Story 7.2 LOCK §1): Prometheus scrapes the 5 demo services' /metrics (the
+# 7.1 render_prometheus exposition) via kubernetes_sd in the `demo` namespace, and the RCA
+# backend (deployed Story 7.3). The agent's read-only adapters (2.2) query this Prometheus
+# at runtime; the adapter read path is INHERITED read-only (AC3, deferred real-transport
+# wiring to 5-A1). Alerting rules emit alerts whose `labels.alertname`/`labels.scenario`
+# map to §3.7 canonicals so the Alertmanager -> ingest path produces valid 1.1 envelopes.
+#
+# Component version deferred to environment (Story 7.2 LOCK — DEFERRED); image tag is a
+# known-good recent Prometheus, swappable.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: observability
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    rule_files: [/etc/prometheus/rules.yml]
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: [alertmanager.observability.svc.cluster.local:9093]
+    scrape_configs:
+      # The 5 demo SUT services — /metrics comes from the 7.1 deterministic render_prometheus.
+      - job_name: demo-services
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: { names: [demo] }
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_demo_rca_service]
+            regex: .+
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_label_demo_rca_service]
+            target_label: service
+          - target_label: __address__
+            replacement: demo  # resolved per-pod via the service label below
+          - source_labels: [service]
+            target_label: __metrics_path__
+            replacement: /metrics
+        # NOTE: for a deterministic POC, also expose static targets of the 5 demo Services
+        # (demo/api-gateway, demo/user, demo/order, demo/inventory, demo/payment :80 /metrics).
+      - job_name: rca-backend
+        static_configs:
+          - targets: [rca-backend.rca.svc.cluster.local:8000]  # deployed Story 7.3
+            labels: { service: rca-backend }
+  rules.yml: |
+    groups:
+      - name: rca-demo-alerts
+        rules:
+          # alertname == §3.7 canonical OR carries labels.scenario -> normalizes cleanly.
+          - alert: DependencyTimeout
+            expr: sum by (service) (demo_upstream_errors_total) > 0
+            for: 1m
+            labels: { severity: critical, scenario: dependency_timeout }
+            annotations: { summary: "upstream dependency timing out", description: "demo_upstream_errors_total > 0" }
+          - alert: PaymentFailureHigh
+            expr: sum by (service) (demo_upstream_errors_total{service="order"}) > 0
+            for: 1m
+            labels: { severity: critical, scenario: payment_failure }
+            annotations: { summary: "payment charge failures", description: "order payment upstream errors" }
+          - alert: InventoryReserveFailureHigh
+            expr: sum by (service) (demo_upstream_errors_total{service="order"}) > 0
+            for: 1m
+            labels: { severity: warning, scenario: inventory_reserve_failure }
+            annotations: { summary: "inventory reserve failures", description: "order inventory upstream errors" }
+          - alert: DownstreamLatencyHigh
+            expr: sum by (service) (demo_requests_total) > 1000
+            for: 2m
+            labels: { severity: warning, scenario: latency_spike }
+            annotations: { summary: "downstream latency elevated", description: "request volume anomaly" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: observability
+  labels: { app.kubernetes.io/name: prometheus }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: prometheus }
+    spec:
+      serviceAccountName: observability-stack
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.54.1
+          args: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus]
+          ports: [{ containerPort: 9090 }]
+          readinessProbe: { httpGet: { path: /-/ready, port: 9090 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus, readOnly: true }
+            - { name: data, mountPath: /prometheus }
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: observability
+spec:
+  selector: { app.kubernetes.io/name: prometheus }
+  ports: [{ name: http, port: 9090, targetPort: 9090 }]
