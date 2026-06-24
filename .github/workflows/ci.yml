@@ -79,7 +79,15 @@ jobs:
       - name: "Gate #5: contract schema 18/9-field (HARD-FAIL)"
         run: uv run pytest tests/ci/test_gate5_contract_schema.py -v
 
-      # Gate #6 — benchmark determinism (AD-13 #6 / FR-10).
-      # PLACEHOLDER: filled by Epic 6 (11-scenario benchmark + calibration/partial-credit/anti-hallucination).
-      - name: "Gate #6: benchmark determinism [PLACEHOLDER — Epic 6]"
-        run: echo "TODO(Epic 6): 11-scenario run + partial-credit/tolerance ON TOP OF binary conjunction §3.7 + anti-hallucination raw-vs-summary (FR-10)"
+      # Gate #6 — benchmark DETERMINISM axis (AD-13 #6 / FR-10 / NFR-Determinism). HARD-FAIL.
+      # Story 6.1 makes ONLY the determinism axis real: the 11-scenario canned inject → REAL adapter
+      # → REAL evidence_normalizer produces a byte-identical Evidence symptom across PYTHONHASHSEED
+      # values (decisive cross-process proof — the test spawns `python -m tests.eval_harness` under
+      # several seeds). The negative test proves the assertion has teeth (a deliberately hash-seed-
+      # dependent blob is caught). SCORING axes are honestly DEFERRED (the 4-A3 pattern — never a
+      # silent green lie): binary conjunction §3.7 → Story 6.2; partial-credit/tolerance window ON
+      # the conjunction → 6.3; anti-hallucination raw-vs-summary (SM-3) → 6.3; playbook-retrieval
+      # independent axis (SM-4) → 6.4. A green gate #6 here means "the inject is deterministic",
+      # NOT "the agent passes the benchmark scoring".
+      - name: "Gate #6: benchmark determinism axis (HARD-FAIL)"
+        run: uv run pytest tests/ci/test_gate6_benchmark_determinism.py -v
