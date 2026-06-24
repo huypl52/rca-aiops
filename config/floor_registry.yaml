@@ -1,0 +1,24 @@
+# config/floor_registry.yaml — AD-12 sufficiency rule-floor registry (Story 4.1 — FR-7 / FR-8 / DEC-3).
+#
+# This is the LOCKED DATA LOCATION for the deterministic anti-hallucination floor (the backbone the LLM
+# ceiling in 4.3 / AD-7 CANNOT override — DEC-3 "LLM không override sàn"). Loaded by the composition root
+# (reflector 4.3) via yaml.safe_load → graph.floor_check.load_floor_registry (schema-validated at load;
+# any violation raises FloorSchemaError, CI gate #4 part b).
+#
+# LOCKED SCHEMA (per canonical_trigger entry — mechanism; do NOT change without a registry version bump):
+#   <canonical_trigger>:
+#     min_count: <int >= 1>            # count of matching evidence items required to PASS the floor
+#     source_type: <non-empty str>      # top-level filter: evidence["source_type"] must equal this
+#     matcher:                          # ONE locked-language predicate
+#       field: <source_name|summary|query>   # ENUM — the deterministic STRING evidence fields only
+#       op: <label-exact|substring|regex>    # ENUM — NO semantic/LLM operator
+#       value: <non-empty str>               # the operand (regex MUST compile — validated at load)
+#
+# A trigger with "no floor" is represented by ABSENCE of an entry (→ fail-closed), NOT min_count: 0.
+#
+# CONTENT STATUS (D3 — DEFERRED): the POC default ships EMPTY — every canonical_trigger is unknown-trigger
+# → fail-closed for all (the HONEST degenerate state; mirrors 3.5's honest default planner). Real per-trigger
+# floor content calibrates via the Epic-6 benchmark (D3). DO NOT invent fake rules here.
+---
+version: 1
+floors: {}

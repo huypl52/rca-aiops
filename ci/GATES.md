@@ -9,7 +9,7 @@ blocks merge, no opt-out, no `continue-on-error`.
 | 1 | Read-only registry (no write/exec/patch/...) | AD-3 (BLOCKER) | **SKELETON WIRED** ✓ | Story 2.1 (real registry) | `ci/gate1_readonly_registry.py` |
 | 2 | Dependency-direction one-way (no back-edge/circular) | AD-1, AD-2 | **WIRED** ✓ | — (living contract) | `uv run lint-imports` |
 | 3 | Type-coherence 2-tier round-trip | AD-9 | **WIRED** ✓ | Story 0.3 | `pytest tests/ci/test_gate3_type_coherence.py` |
-| 4 | Floor determinism (pure-function + registry schema) | AD-12 | placeholder | **Epic 4** | `pytest` (floor_check) |
+| 4 | Floor determinism (pure-function + registry schema) | AD-12, DEC-3 | **WIRED** ✓ | Story 4.1 (mechanism) | `pytest tests/ci/test_gate4_floor_determinism.py` |
 | 5 | Contract schema preservation (18/9-field no drift) | AD-6 | **WIRED** ✓ | Story 0.2 | `pytest tests/ci/test_gate5_contract_schema.py` |
 | 6 | Benchmark determinism (11-scenario + calibration) | FR-10, AD-13 #6 | placeholder | **Epic 6** | `eval/` harness |
 
@@ -79,8 +79,36 @@ Pydantic port contract. Two assertions, BOTH must pass to merge (HARD-FAIL).
 - **13-key spine:** gate also asserts `InvestigationState.__annotations__` == exactly the
   13 AD-9 top-level keys (no invented/missing key).
 
-## Gates #4, #6 — placeholders (Story 0.1)
+## Gate #4 — Floor determinism (AD-13 #4 / AD-12 / DEC-3)
 
-Remaining placeholder steps in `.github/workflows/ci.yml` with `TODO(<epic>)` trace.
-Each is filled when the corresponding artifact exists. They are NOT silently passing
-gates — each prints its pending definition so reviewers see the gap.
+The sufficiency rule-floor (the deterministic anti-hallucination backbone the LLM ceiling in 4.3 /
+AD-7 CANNOT override — DEC-3 "LLM không override sàn") MUST be a provably PURE function, and its
+declarative registry MUST fail-fast on a malformed schema. Both must hold to merge (HARD-FAIL).
+
+- **Source-of-truth mechanism:** `graph/floor_check.py` — STDLIB-ONLY pure module (NO models / config /
+  tools / graph back-edge / file IO). Predicate LANGUAGE locked: operator ENUM `{label-exact, substring,
+  regex}`; matcher field ENUM `{source_name, summary, query}`; floor spec `{min_count>=1, source_type,
+  matcher}`; `FloorResult{floor_pass, matched_count, min_count, reason}` frozen. `load_floor_registry`
+  schema-validates-at-load (fail-fast `FloorSchemaError`); unknown-trigger → fail-closed (NEVER fail-open).
+- **Registry data:** `config/floor_registry.yaml` — LOCKED DATA LOCATION. POC default EMPTY (D3 content
+  DEFERRED — every trigger fail-closed; honest degenerate state, no invented rules). Loaded by the
+  composition root (reflector 4.3) via `yaml.safe_load` → `load_floor_registry`.
+- **Bind:** `uv run pytest tests/ci/test_gate4_floor_determinism.py -v` (HARD-FAIL).
+- **(a) Pure-function determinism (AD-12):** same `(canonical_trigger, evidence)` → byte-identical
+  `FloorResult` across repeated calls; order-independent count; **PYTHONHASHSEED-safe** (proven across
+  fresh interpreter processes with DIFFERENT hash seeds → identical serialized verdict); AST: ZERO
+  forbidden nondeterminism sources (no random/time/datetime/uuid imported).
+- **(b) Registry schema-validate-at-load (fail-fast):** `load_floor_registry` RAISES `FloorSchemaError`
+  for EVERY §2.5 violation kind (unknown op, field outside ENUM, min_count missing/<1/non-int/bool,
+  source_type missing/empty, matcher missing key / not-a-mapping / value empty-or-non-str / invalid
+  regex, top-level not-a-mapping, key non-str/empty, bad version); AND the SHIPPED `floor_registry.yaml`
+  loads cleanly through the loader (a malformed YAML is a silent production regression caught at gate
+  time, never in a verdict).
+- **Negative (FAIL proven):** inject each violation kind → `FloorSchemaError` at LOAD (parametrized);
+  a non-deterministic verdict under PYTHONHASHSEED → assertion divergence.
+
+## Gate #6 — placeholder (Epic 6)
+
+Remaining placeholder step in `.github/workflows/ci.yml` with `TODO(Epic 6)` trace.
+Filled when the `eval/` 11-scenario benchmark harness exists. NOT a silently passing
+gate — it prints its pending definition so reviewers see the gap.
