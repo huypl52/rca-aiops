@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Mapping
 from functools import lru_cache
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
@@ -47,6 +47,14 @@ from langgraph.graph.state import CompiledStateGraph
 
 from graph.runner import GraphRunner, GraphRunnerResult, _snapshot_from_state
 from graph.state import InvestigationState, JsonValue, create_initial_state
+
+if TYPE_CHECKING:
+    # Typing-only (graph→tools FORWARD is LEGAL, but the module surface stays tools-free at runtime per
+    # §2.7 / gate#2: build_default_compiled_runner's ``adapter`` seam is typed against the PORT Protocol
+    # WITHOUT a module-level tools import — tools is imported LAZILY inside the composition root, as before).
+    # ``if TYPE_CHECKING`` is never executed at runtime + is AST-invisible to top-level-import walkers, so
+    # the §2.7 "module-level imports = graph + langgraph + stdlib ONLY" contract holds + lint-imports is clean.
+    from tools.port import ReadOnlyAdapterPort
 
 # ONE-WAY (AD-1 / gate #2): graph.state + graph.runner (same layer) + langgraph (3rd-party) + stdlib
 # ONLY at module level. NO tools/routers/services/adapters — the builder takes the EXR node via DI;
@@ -386,15 +394,52 @@ class CompiledGraphRunner(GraphRunner):
     ) -> GraphRunnerResult:
         """Run the compiled graph for ``investigation_id`` to terminal (entry contract — AD-2)."""
         # The graph layer owns state (AD-2): the dispatcher never touches internals. Fresh state per
-        # run (no LangGraph checkpointer — cross-restart durability = Story 7-4).
+        # run (no LangGraph checkpointer — cross-restart durability = Story 7-4). The astream +
+        # GraphRecursionError→partial drive lives in :meth:`_drive_to_terminal` (shared with the
+        # Story-6.2 benchmark sibling :meth:`run_terminal_state` — singular drive, no divergence).
         state = create_initial_state(incident_id=investigation_id, trigger=dict(trigger))
-        recursion_limit = max(max_iterations, 1) * self._nodes_per_iteration
+        status, terminal = await self._drive_to_terminal(state, max_iterations)
+        if status == "partial":
+            # max_iterations exceeded → BOUNDED → honest PARTIAL carrying the reflector's last
+            # sufficiency.gap ("chưa đủ — cần thêm X"). NOT a silent binary status="failed" — a genuine
+            # infra failure stays "failed"; cap-exhaustion is observable as a PARTIAL.
+            return GraphRunnerResult(
+                status="partial",
+                state_snapshot=_partial_snapshot(terminal),
+                report=None,
+            )
 
-        # Story 4-3 (FR-7 / AD-10 #5): STREAM with ``stream_mode="values"`` (NOT the default
-        # ``"updates"`` — which yields per-node update dicts, not the full state) so the latest FULL state
-        # is captured even when the recursion cap fires mid-investigation. ``ainvoke`` does not surface a
-        # partial state on cap-exhaustion, so ``astream`` is required to project the reflector's last
-        # sufficiency.gap as an honest PARTIAL (NOT a silent binary "failed").
+        report_value = terminal.get("report")
+        report: dict[str, JsonValue] | None = (
+            report_value if isinstance(report_value, dict) else None
+        )
+        return GraphRunnerResult(
+            status="success",
+            state_snapshot=_snapshot_from_state(terminal),
+            report=report,
+        )
+
+    async def _drive_to_terminal(
+        self,
+        state: InvestigationState,
+        max_iterations: int,
+    ) -> tuple[str, InvestigationState]:
+        """Stream the compiled graph to terminal → ``(status, last_state)`` — the shared drive (AD-2).
+
+        Used by BOTH :meth:`run` (the dispatcher PORT — projects an AD-9 BOUNDED snapshot) and
+        :meth:`run_terminal_state` (the Story-6.2 benchmark sibling — returns the FULL terminal state).
+        Extracted so the drive logic is SINGULAR: the port projection and the benchmark projection can
+        never diverge (both consume this one terminal state).
+
+        Story 4-3 (FR-7 / AD-10 #5): STREAM with ``stream_mode="values"`` (NOT the default ``"updates"`` —
+        which yields per-node update dicts, not the full state) so the latest FULL state is captured even
+        when the recursion cap fires mid-investigation. ``ainvoke`` does not surface a partial state on
+        cap-exhaustion, so ``astream`` is required to project the reflector's last sufficiency.gap as an
+        honest PARTIAL (NOT a silent binary "failed"). Carry-forward 1-A4 (HARD): the loop is BOUNDED —
+        ``max_iterations`` → ``recursion_limit`` via :data:`_NODES_PER_ITERATION`; exceeding it raises
+        ``GraphRecursionError``, caught here → an honest PARTIAL.
+        """
+        recursion_limit = max(max_iterations, 1) * self._nodes_per_iteration
         last_state: InvestigationState | None = None
         try:
             async for chunk in self._graph.astream(
@@ -402,26 +447,37 @@ class CompiledGraphRunner(GraphRunner):
             ):
                 last_state = cast(InvestigationState, chunk)
         except GraphRecursionError:
-            # max_iterations exceeded → BOUNDED → honest PARTIAL carrying the reflector's last
-            # sufficiency.gap ("chưa đủ — cần thêm X"). NOT a silent binary status="failed" — a genuine
-            # infra failure stays "failed"; cap-exhaustion is observable as a PARTIAL.
-            partial_state = last_state if last_state is not None else state
-            return GraphRunnerResult(
-                status="partial",
-                state_snapshot=_partial_snapshot(partial_state),
-                report=None,
-            )
+            return ("partial", last_state if last_state is not None else state)
+        return ("success", last_state if last_state is not None else state)
 
-        final_state: InvestigationState = last_state if last_state is not None else state
-        report_value = final_state.get("report")
-        report: dict[str, JsonValue] | None = (
-            report_value if isinstance(report_value, dict) else None
-        )
-        return GraphRunnerResult(
-            status="success",
-            state_snapshot=_snapshot_from_state(final_state),
-            report=report,
-        )
+    async def run_terminal_state(
+        self,
+        trigger: dict[str, JsonValue],
+        investigation_id: str,
+        max_iterations: int,
+    ) -> dict[str, JsonValue]:
+        """Run to terminal returning the FULL state — Story-6.2 benchmark instrument (sibling of run()).
+
+        ``run()`` is the dispatcher PORT: it projects an AD-9 **BOUNDED** snapshot
+        (context / next_action / evidence_count / tool_calls_count) + report — the dispatcher contract
+        (AD-9 deliberately exposes COUNTS, not the agent's gathered LISTS). The Story-6.2 binary-conjunction
+        evaluator needs the actual ``evidence`` / ``tool_calls`` LISTS (conditions c/d) and the ``report``
+        (condition e) — which the bounded port omits. This sibling returns the FULL terminal
+        ``InvestigationState`` projection (all spine keys, JSON-safe) + the run ``status``; the benchmark
+        reads the agent's OWN terminal outputs.
+
+        This is NOT the dispatcher contract: the dispatcher NEVER calls this (it uses ``run()``); both
+        share :meth:`_drive_to_terminal` (no logic divergence). Spine-13 is unchanged (this PROJECTS, it
+        never writes a key); the bounded PORT (``run()``) and the dispatcher module default
+        (``ContextBuilderRunner``) are byte-identical to pre-6.2. The harness drives the SAME compiled
+        graph the dispatcher would (a ScenarioTransport-wired ``CompositeReadOnlyAdapter`` via
+        :func:`build_default_compiled_runner`'s ``adapter`` seam) — so it measures the FULL AGENT (the
+        agent's OWN tool selection + evidence + report through the compiled graph), NOT a shortcut
+        (conjunction forbids bypassing the agent — Story 6.2 R3).
+        """
+        state = create_initial_state(incident_id=investigation_id, trigger=dict(trigger))
+        status, terminal = await self._drive_to_terminal(state, max_iterations)
+        return {"status": status, "state": cast(JsonValue, dict(terminal))}
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +487,11 @@ class CompiledGraphRunner(GraphRunner):
 # ---------------------------------------------------------------------------
 
 
-def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRunner:
+def build_default_compiled_runner(
+    *,
+    max_hypotheses: int = 5,
+    adapter: ReadOnlyAdapterPort | None = None,
+) -> CompiledGraphRunner:
     """Composition root: assemble the POC-default compiled-graph runner.
 
     Builds the registry (2-1) + stub adapter (2-1) + router (2-3) + the 5 real nodes + the EXR node
@@ -465,7 +525,12 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     from tools.registry import build_default_registry
     from tools.router import ExecutorRouter
 
-    adapter = StubReadOnlyAdapter()
+    # 6.2 seam: the composition-root adapter is INJECTABLE so the Story-6.2 benchmark harness wires a
+    # ScenarioTransport-backed CompositeReadOnlyAdapter and drives the FULL agent over each scenario.
+    # Default (None) → the StubReadOnlyAdapter — byte-identical to pre-6.2 (the production composition
+    # root is UNCHANGED; the dispatcher module default stays ContextBuilderRunner; spine-13 untouched).
+    if adapter is None:
+        adapter = StubReadOnlyAdapter()
     registry = build_default_registry()
     router = ExecutorRouter(registry, adapter)
 

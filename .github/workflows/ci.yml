@@ -85,9 +85,15 @@ jobs:
       # values (decisive cross-process proof — the test spawns `python -m tests.eval_harness` under
       # several seeds). The negative test proves the assertion has teeth (a deliberately hash-seed-
       # dependent blob is caught). SCORING axes are honestly DEFERRED (the 4-A3 pattern — never a
-      # silent green lie): binary conjunction §3.7 → Story 6.2; partial-credit/tolerance window ON
-      # the conjunction → 6.3; anti-hallucination raw-vs-summary (SM-3) → 6.3; playbook-retrieval
-      # independent axis (SM-4) → 6.4. A green gate #6 here means "the inject is deterministic",
-      # NOT "the agent passes the benchmark scoring".
+      # silent green lie): binary conjunction §3.7 DETERMINISM → Story 6.2 (DONE — the full-agent
+      # conjunction blob, driving the compiled graph over all 11, is byte-stable across PYTHONHASHSEED);
+      # partial-credit/tolerance window ON the conjunction → 6.3; anti-hallucination raw-vs-summary
+      # (SM-3) → 6.3; playbook-retrieval independent axis (SM-4) → 6.4. A green gate #6 here means
+      # "the inject→symptom AND the full-agent conjunction RUN + are DETERMINISTIC", NOT "the agent
+      # passes the benchmark scoring" — the 6.2 honest baseline is SM-1 = 0% (the graph does not
+      # converge, 5-A1; fixing that is a SEPARATE story) + SM-2 blocked (no reports); the scoring PASS
+      # + any confidence/SM cutoff (D4) are NOT asserted here.
       - name: "Gate #6: benchmark determinism axis (HARD-FAIL)"
-        run: uv run pytest tests/ci/test_gate6_benchmark_determinism.py -v
+        run: |
+          uv run pytest tests/ci/test_gate6_benchmark_determinism.py -v
+          uv run pytest tests/ci/test_gate6_conjunction_determinism.py -v
