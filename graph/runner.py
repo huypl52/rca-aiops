@@ -53,8 +53,9 @@ class GraphRunnerResult(TypedDict, total=False):
     13-key spine (context / next_action / counts). No invented keys."""
 
     report: dict[str, JsonValue] | None
-    """RCA report (FR-9); ``None`` until the rca_writer node (Story 5-1). Minimal
-    runners emit ``None`` — the report shape is deferred to Epic 5."""
+    """RCA report (FR-9); the cited report from the rca_writer node (Story 5-1 —
+    AD-6 evidence-sourced), or ``None`` when WRT never ran (a PARTIAL) / on a minimal
+    runner. The report is a STATE DICT on the 13-key spine (AD-9 — NO Pydantic model)."""
 
 
 @runtime_checkable

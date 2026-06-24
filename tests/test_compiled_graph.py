@@ -165,7 +165,9 @@ def test_happy_path_proceeds_dispatches_and_terminates_success() -> None:
     runner = _happy_runner()
     result: GraphRunnerResult = _run(runner.run(_TRIGGER, "inv-happy", max_iterations=10))
     assert result["status"] == "success"
-    assert result["report"] is None  # WRT is the 5-1 DEFERRED stub → report None
+    # _happy_runner injects the DI-default WRT STUB (real rca_writer is 5-1, wired at the composition
+    # root build_default_compiled_runner) → this happy path yields report None by construction.
+    assert result["report"] is None
     snap = result["state_snapshot"]
     assert snap["tool_calls_count"] == 1  # EXR dispatched exactly one read-only query
     assert isinstance(snap["context"], dict) and snap["context"].get("service") == "checkout"

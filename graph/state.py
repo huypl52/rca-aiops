@@ -275,7 +275,7 @@ class InvestigationState(TypedDict, total=False):
 
     # 13 — set once. RCA report (FR-9).
     report: dict[str, JsonValue] | None
-    """Final RCA report (None until rca_writer, Epic 5)."""
+    """Final RCA report (None until the rca_writer node [5-1] populates it)."""
 
 
 # Sanity: the spine has EXACTLY 13 top-level keys (leader DEEP counts this).

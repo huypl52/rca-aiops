@@ -7,17 +7,17 @@ UNCHANGED — it already depends on the PORT; 3.5 plugs ``CompiledGraphRunner`` 
 (the AC2 seam the leader DEEP-reviews).
 
 **3.5 = the ASSEMBLY MECHANISM + the EXR node-wiring + the runner plug. It is NOT yet the full runtime.**
-Of the 8 §3.5 nodes, **7 now have real content**: ICB (1-3), PBR (3-1), HYP (3-2 + 3-4 fuzzy-aware
-planner), VAL (3-3), EXR (3.5 — node-wiring over the 2-3 router), ENV (evidence_normalizer = 4-2),
-REF (reflector = 4-3). Only **WRT (rca_writer = 5-1) is still a DI-default stub**. The EDGES are wired
-NOW (the contract-critical part); the deferred node's CONTENT is stubbed (§DEFER). 4.x/5-1 swap stub→real
-node via the SAME ``build_compiled_graph`` factory param — edges NEVER re-wire (the 4-2/4-3 swaps touched
-NO edge). This is the SAME lock-the-MECHANISM / defer-CONTENT discipline as 3.4.
+ALL **8 §3.5 nodes now have real content**: ICB (1-3), PBR (3-1), HYP (3-2 + 3-4 fuzzy-aware planner),
+VAL (3-3), EXR (3.5 — node-wiring over the 2-3 router), ENV (evidence_normalizer = 4-2), REF (reflector
+= 4-3), WRT (rca_writer = 5-1). The EDGES are wired NOW (the contract-critical part); the composition
+root wires each real node via the SAME ``build_compiled_graph`` factory param — edges NEVER re-wire (the
+4-2/4-3/5-1 swaps touched NO edge). This is the SAME lock-the-MECHANISM / swap-CONTENT discipline as 3.4.
 
 ANTI-DRIFT (do NOT build these here — they steal Epic 5/7 work):
-  - **WRT real node content** (5-1) → the DI-default deterministic STUB (§DEFER). The stub is a NODE
-    injected into the SAME builder; swapping it (5-1) will touch NO wiring (ENV 4-2 / REF 4-3 already
-    swapped stub→real the same way, touching NO edge).
+  - **WRT real node content** (5-1) → DELIVERED (``build_rca_writer``, wired at the composition root).
+    The DI-default deterministic STUB (§DEFER) is RETAINED as the DI-param default so a report=None WRT
+    stays a valid test/composition choice — the swap touched NO wiring (ENV 4-2 / REF 4-3 already swapped
+    stub→real the same way, touching NO edge).
   - **Hypothesis-ADVANCE on replan** (try the next untried hypothesis). The POC-default promotion
     re-promotes the SAME top-priority plan (deterministic); a VAL-rejected plan re-rejects, and REF
     fail-closes (empty D3 registry) → ``gather_more`` → bounded by ``max_iterations`` (carry-forward
@@ -116,10 +116,13 @@ def _reflector_stub(state: InvestigationState) -> dict[str, JsonValue]:
 
 
 def _rca_writer_stub(state: InvestigationState) -> dict[str, JsonValue]:
-    """DEFERRED — real rca_writer is Story 5-1.
+    """DI-DEFAULT fallback for tests/composition that exercise the REF→WRT→END edge WITHOUT a report.
 
-    Minimal: ``report=None`` (report stays None until 5-1). The real node emits the RCA report
-    (FR-9, evidence-sourced, no remediation). Deterministic (AD-12).
+    Real ``rca_writer`` is Story 5-1 (DELIVERED — :func:`graph.nodes.rca_writer.build_rca_writer`, wired
+    at the composition root :func:`build_default_compiled_runner`). This stub is RETAINED as the
+    ``rca_writer`` DI-param default: a no-op ``report=None`` WRT is a valid test/composition choice
+    (e.g. the 3-5 happy-path runner that exercises the edge without producing a cited report). The real
+    node emits the cited RCA report (FR-9, AD-6 evidence-sourced, no remediation). Deterministic (AD-12).
     """
     del state
     return {"report": None}
@@ -263,7 +266,8 @@ def build_compiled_graph(
         executor_router: the EXR node (3.5 — :func:`build_executor_router_node`).
         evidence_normalizer: the ENV node (default the 4-2 DEFERRED stub).
         reflector: the REF node (default the 4-3 DEFERRED stub).
-        rca_writer: the WRT node (default the 5-1 DEFERRED stub).
+        rca_writer: the WRT node (default the DI-default stub — real ``build_rca_writer`` is 5-1,
+            wired at the composition root :func:`build_default_compiled_runner`).
 
     Returns:
         the compiled ``StateGraph(InvestigationState)`` (a ``CompiledStateGraph``), immutable per
@@ -348,7 +352,9 @@ class CompiledGraphRunner(GraphRunner):
     to registry ``failed`` — production wiring of ``partial`` at the registry level is deferred Epic 5/6;
     the runner-level outcome here is the honest signal.)
 
-    ``report`` is ``None`` until the rca_writer node (5-1); the WRT stub emits ``{"report": None}``.
+    ``report`` is produced by the rca_writer node (5-1 — :func:`build_rca_writer`, wired at the
+    composition root): a cited RCA report dict on a real ``write`` route, or ``None`` when WRT never ran
+    (a PARTIAL) / when the DI-default WRT stub was injected.
 
     NOTE on the POC default: the loop does NOT converge in the POC — the 3-2 rule-based plans lack the
     tool/query/timestamp_range trio VAL requires (VAL replans), and the reflector's floor registry is
@@ -430,7 +436,7 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
 
     Builds the registry (2-1) + stub adapter (2-1) + router (2-3) + the 5 real nodes + the EXR node
     + the plan-promotion-wrapped HYP, compiles the graph (ONCE — AD-2) with the REAL ENV (4-2) + REAL
-    REF (4-3) + the DI-default WRT stub, and returns a ready ``CompiledGraphRunner``. Deterministic +
+    REF (4-3) + the REAL WRT (5-1), and returns a ready ``CompiledGraphRunner``. Deterministic +
     dependency-light for tests.
 
     Production wiring (swapping this in as the default dispatcher) is applied at the composition root
@@ -453,6 +459,7 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     from graph.nodes.incident_context_builder import incident_context_builder
     from graph.nodes.plan_validator import build_plan_validator
     from graph.nodes.preplanning_playbook_retriever import build_preplanning_playbook_retriever
+    from graph.nodes.rca_writer import build_rca_writer
     from graph.nodes.reflector import build_reflector
     from tools.port import StubReadOnlyAdapter
     from tools.registry import build_default_registry
@@ -491,6 +498,10 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
         # 4-3: the REAL reflector (was the 3-5 DEFERRED stub). The stub stays the DI-param default (a
         # no-op "always write" REF is a valid test/composition choice — e.g. the 3-5 happy-path runner).
         reflector=reflector,
+        # 5-1: the REAL rca_writer (was the 3-5 DEFERRED stub). The stub stays the DI-param default (a
+        # report=None WRT is a valid test/composition choice — e.g. the 3-5 happy-path runner, which
+        # exercises the REF→WRT→END edge without producing a cited report).
+        rca_writer=build_rca_writer(),
     )
     return CompiledGraphRunner(graph)
 
