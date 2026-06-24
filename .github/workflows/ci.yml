@@ -67,10 +67,16 @@ jobs:
       - name: "Gate #3: type-coherence round-trip (HARD-FAIL)"
         run: uv run pytest tests/ci/test_gate3_type_coherence.py -v
 
-      # Gate #4 — floor determinism (AD-13 #4 / AD-12).
-      # PLACEHOLDER: filled by Epic 4 (floor registry + floor_check pure-function test).
-      - name: "Gate #4: floor determinism [PLACEHOLDER — Epic 4]"
-        run: echo "TODO(Epic 4): floor_check pure-function (same input → same output) + declarative registry schema-validate at load (AD-12)"
+      # Gate #4 — floor determinism (AD-13 #4 / AD-12). HARD-FAIL, no opt-out.
+      # Story 4.1: asserts floor_check is a PURE function (same input -> same FloorResult) AND is
+      # PYTHONHASHSEED-safe cross-process (seeds {0,1,7,42,99} -> identical serialized verdict) AND the
+      # declarative registry schema-validates-at-load (every malformed floor spec -> FloorSchemaError).
+      # PROMOTED 2026-06-24 at the Epic-6 retrospective (leader-driven): this was a `echo "TODO(Epic 4)"`
+      # PLACEHOLDER since Epic 4 — 7 stories stale (Epic 4 x1 + Epic 5 x2 + Epic 6 x4). The test
+      # tests/ci/test_gate4_floor_determinism.py existed + was green (40 passed) the whole time, but
+      # ci.yml was a no-op echo — so the "WIRED" claim in ci/GATES.md was a green-lie. Closed here.
+      - name: "Gate #4: floor determinism (HARD-FAIL)"
+        run: uv run pytest tests/ci/test_gate4_floor_determinism.py -v
 
       # Gate #5 — contract schema preservation 18/9-field (AD-13 #5 / AD-6). HARD-FAIL, no opt-out.
       # Story 0.2: asserts IncidentTrigger == 18 §3.4 fields + Evidence == 9 §3.6 fields, no drift.
