@@ -5,8 +5,9 @@ Covers the DEEP-review spotlights for Story 3.5:
     different nodes → rebuilt. ``CompiledGraphRunner.run()`` reuses it.
   - **full 8-node topology**: all §3.5 node names wired; the happy path runs ICB→PBR→HYP→VAL→EXR→ENV→REF→WRT→END.
   - **EXR node-wiring in the graph**: a valid promoted plan → EXR dispatches → ``tool_calls_count`` rises.
-  - **max_iterations BOUNDED → status="failed"** (carry-forward 1-A4): the default (degenerate) planner
-    never satisfies VAL → loops → the recursion cap fires → ``failed``, no hang.
+  - **max_iterations BOUNDED → status="partial"** (carry-forward 1-A4 / Story 4-3 / AD-10 #5): the
+    default (degenerate) planner never satisfies VAL → loops → the recursion cap fires → an honest
+    ``partial`` (carrying ``sufficiency``; NOT a silent binary ``failed``), no hang.
   - **AC2 seam**: ``services/dispatch.py`` is UNCHANGED — its source imports only ``graph.runner`` and
     contains NO ``compiled``/``StateGraph``/``CompiledGraphRunner`` reference (the plug is composition-root).
   - **entry contract + GraphRunner Protocol**: ``CompiledGraphRunner`` is a structural ``GraphRunner``;

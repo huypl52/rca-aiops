@@ -6,22 +6,26 @@ via the ``GraphRunner`` PORT (``graph/runner.py``). The dispatcher (``services/d
 UNCHANGED — it already depends on the PORT; 3.5 plugs ``CompiledGraphRunner`` WITHOUT touching it
 (the AC2 seam the leader DEEP-reviews).
 
-**3.5 = the ASSEMBLY MECHANISM + the EXR node-wiring + the runner plug. It is NOT the full runtime.**
-Of the 8 §3.5 nodes, only **5 have real content** at this point: ICB (1-3), PBR (3-1), HYP (3-2 +
-3-4 fuzzy-aware planner), VAL (3-3), EXR (3.5 — node-wiring over the 2-3 router). The remaining 3 —
-ENV (evidence_normalizer = 4-2), REF (reflector = 4-3), WRT (rca_writer = 5-1) — DO NOT EXIST yet.
-The EDGES are wired NOW (the contract-critical part); only the 3 deferred nodes' CONTENT is stubbed
-(§DEFER). 4.x/5-1 swap stub→real node via the SAME ``build_compiled_graph`` factory param — edges
-NEVER re-wire. This is the SAME lock-the-MECHANISM / defer-CONTENT discipline as 3.4.
+**3.5 = the ASSEMBLY MECHANISM + the EXR node-wiring + the runner plug. It is NOT yet the full runtime.**
+Of the 8 §3.5 nodes, **7 now have real content**: ICB (1-3), PBR (3-1), HYP (3-2 + 3-4 fuzzy-aware
+planner), VAL (3-3), EXR (3.5 — node-wiring over the 2-3 router), ENV (evidence_normalizer = 4-2),
+REF (reflector = 4-3). Only **WRT (rca_writer = 5-1) is still a DI-default stub**. The EDGES are wired
+NOW (the contract-critical part); the deferred node's CONTENT is stubbed (§DEFER). 4.x/5-1 swap stub→real
+node via the SAME ``build_compiled_graph`` factory param — edges NEVER re-wire (the 4-2/4-3 swaps touched
+NO edge). This is the SAME lock-the-MECHANISM / defer-CONTENT discipline as 3.4.
 
-ANTI-DRIFT (do NOT build these here — they steal Epic 4/5 work):
-  - **ENV/REF/WRT real node content** (4-2/4-3/5-1) → DI-default deterministic STUBS (§DEFER). The
-    stubs are NODES injected into the SAME builder; swapping them does not touch the wiring.
-  - **Hypothesis-ADVANCE on replan** (try the next untried hypothesis) → REF 4-3. The POC-default
-    promotion re-promotes the SAME top-priority plan (deterministic); a VAL-rejected plan re-rejects
-    → bounded by ``max_iterations`` (carry-forward 1-A4). Honest degenerate loop; advance = 4.3.
-  - **partial "chưa đủ" REPORT content** → REF 4-3 / WRT 5-1. On max-iter the runner returns registry
-    ``status="failed"`` (lifecycle); the "chưa đủ" report framing is DEFERRED.
+ANTI-DRIFT (do NOT build these here — they steal Epic 5/7 work):
+  - **WRT real node content** (5-1) → the DI-default deterministic STUB (§DEFER). The stub is a NODE
+    injected into the SAME builder; swapping it (5-1) will touch NO wiring (ENV 4-2 / REF 4-3 already
+    swapped stub→real the same way, touching NO edge).
+  - **Hypothesis-ADVANCE on replan** (try the next untried hypothesis). The POC-default promotion
+    re-promotes the SAME top-priority plan (deterministic); a VAL-rejected plan re-rejects, and REF
+    fail-closes (empty D3 registry) → ``gather_more`` → bounded by ``max_iterations`` (carry-forward
+    1-A4). Honest degenerate loop; ADVANCE is deferred.
+  - **partial "chưa đủ" surfacing at the registry/API level.** On cap-exhaustion the RUNNER already
+    returns an honest ``status="partial"`` carrying the reflector's ``sufficiency.gap`` (Story 4-3 /
+    FR-7 / AD-10 #5); the dispatcher still maps an unknown runner status to registry ``failed``,
+    so surfacing ``partial`` (vs ``failed``) at the services layer is deferred Epic 5/6.
   - **No LangGraph checkpointer** → cross-restart durability (SqliteSaver, AD-11) = Story 7-4.
 
 ONE-WAY (AD-1 / gate #2): module-level imports are ``graph.state`` + ``graph.runner`` (same layer) +
@@ -72,7 +76,8 @@ NA_WRITE = "write"
 # iterations) to LangGraph's ``recursion_limit`` (node supersteps). A full PE-R loop iteration visits
 # at most ~6 distinct nodes (HYP→VAL→EXR→ENV→REF→back-to-HYP); 8 is a conservative ceiling (the
 # one-time ICB/PBR prefix is amortized across iterations). This GUARANTEES the loop is BOUNDED — no
-# infinite loop is possible — and exceed → ``status="failed"`` (carry-forward 1-A4). The number is a
+# infinite loop is possible — and exceeding it → ``status="partial"`` (carry-forward 1-A4 / Story
+# 4-3 / AD-10 #5: NOT a silent binary fail). The number is a
 # POC choice (deterministic + sane); tuning is deferred.
 _NODES_PER_ITERATION: int = 8
 
@@ -345,13 +350,17 @@ class CompiledGraphRunner(GraphRunner):
 
     ``report`` is ``None`` until the rca_writer node (5-1); the WRT stub emits ``{"report": None}``.
 
-    NOTE on the POC default: with the POC-default nodes (3-2 rule-based plans lack the
-    tool/query/timestamp_range trio VAL requires), VAL replans indefinitely → the bound fires →
-    ``status="failed"``. That is the HONEST degenerate state of the POC (real convergence needs the
-    reflector + hypothesis-advance of Epic 4). The MECHANISM (compile-once, bounded run, entry
-    contract) is complete; convergence CONTENT is deferred. Production wiring as the default
-    dispatcher is therefore deferred until Epic 4/5 — the dispatcher module default
-    (``ContextBuilderRunner``) is UNCHANGED (Story 1-4 tests stay green).
+    NOTE on the POC default: the loop does NOT converge in the POC — the 3-2 rule-based plans lack the
+    tool/query/timestamp_range trio VAL requires (VAL replans), and the reflector's floor registry is
+    EMPTY (D3 content deferred) so REF fail-closes → ``gather_more`` while HYP re-promotes the SAME plan
+    (hypothesis-ADVANCE on replan is deferred). The loop is HARD-bounded by ``max_iterations`` → on
+    cap-exhaustion the honest outcome is ``status="partial"`` (Story 4-3 / FR-7 / AD-10 #5), carrying the
+    reflector's last ``sufficiency`` (``{}`` when the degenerate planner never reaches REF — still an
+    observable, honest verdict; NEVER a silent binary ``status="failed"``). The MECHANISM (compile-once,
+    bounded run, entry contract, reflector + PARTIAL) is complete; convergence CONTENT (a populated floor
+    registry + hypothesis-advance) is deferred. Production wiring as the default dispatcher is therefore
+    deferred until the graph converges — the dispatcher module default (``ContextBuilderRunner``) is
+    UNCHANGED (Story 1-4 tests stay green).
     """
 
     def __init__(
@@ -420,12 +429,13 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     """Composition root: assemble the POC-default compiled-graph runner.
 
     Builds the registry (2-1) + stub adapter (2-1) + router (2-3) + the 5 real nodes + the EXR node
-    + the plan-promotion-wrapped HYP, compiles the graph (ONCE — AD-2) with the DI-default ENV/REF/WRT
-    stubs, and returns a ready ``CompiledGraphRunner``. Deterministic + dependency-light for tests.
+    + the plan-promotion-wrapped HYP, compiles the graph (ONCE — AD-2) with the REAL ENV (4-2) + REAL
+    REF (4-3) + the DI-default WRT stub, and returns a ready ``CompiledGraphRunner``. Deterministic +
+    dependency-light for tests.
 
     Production wiring (swapping this in as the default dispatcher) is applied at the composition root
     (``set_default_dispatcher(Dispatcher(runner=build_default_compiled_runner(), ...))``) — it is
-    DEFERRED until Epic 4/5 make the graph converge (the dispatcher module default stays
+    DEFERRED until Epic 5 makes the graph converge (the dispatcher module default stays
     ``ContextBuilderRunner``; Story 1-4 tests stay green).
     """
     # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.* same layer). Kept inside this composition
