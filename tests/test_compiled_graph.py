@@ -184,29 +184,32 @@ def test_run_signature_matches_entry_contract() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Carry-forward 1-A4 — max_iterations BOUNDED loop → status="failed" (no hang)
+# Carry-forward 1-A4 — max_iterations BOUNDED loop → status="partial" (4-3: NOT a silent fail)
 # ---------------------------------------------------------------------------
 
 
-def test_default_planner_is_bounded_and_fails_without_hanging() -> None:
-    """The POC-default (degenerate) planner never satisfies VAL → bounded by max_iterations → failed.
+def test_default_planner_is_bounded_and_partials_without_hanging() -> None:
+    """The POC-default (degenerate) planner never satisfies VAL → bounded by max_iterations → partial.
 
-    This is the HONEST POC state (real convergence needs Epic 4 reflector + hypothesis-advance).
-    The MECHANISM under test: the loop is HARD-bounded — max_iterations maps to a recursion_limit;
-    exceeding it yields ``status="failed"`` rather than hanging. We assert both the bound fires AND
-    the call returns promptly.
+    This is the HONEST POC state (real convergence needs Epic 4 hypothesis-advance). The MECHANISM
+    under test: the loop is HARD-bounded — max_iterations maps to a recursion_limit; exceeding it yields
+    ``status="partial"`` (Story 4-3 / FR-7 / AD-10 #5 — NOT a silent binary ``status="failed"``) rather
+    than hanging. The PARTIAL carries the reflector's ``sufficiency`` verdict (here empty ``{}`` — the
+    degenerate planner loops at HYP↔VAL and never reaches REF; still honest + observable). We assert
+    both the bound fires AND the call returns promptly.
     """
     runner = build_default_compiled_runner()  # 3-2 rule-based plans lack the VAL trio → replan loop
     result = _run(runner.run(_TRIGGER, "inv-bounded", max_iterations=1))
-    assert result["status"] == "failed"
+    assert result["status"] == "partial"
     assert result["report"] is None
+    assert "sufficiency" in result["state_snapshot"]  # 4-3: partial carries the sufficiency verdict
 
 
 def test_bounded_loop_is_truly_bounded_under_more_iterations() -> None:
-    """A larger max_iterations still terminates (failed) — the cap scales, never hangs."""
+    """A larger max_iterations still terminates (partial) — the cap scales, never hangs."""
     runner = build_default_compiled_runner()
     result = _run(runner.run(_TRIGGER, "inv-bounded-2", max_iterations=5))
-    assert result["status"] == "failed"
+    assert result["status"] == "partial"
 
 
 # ---------------------------------------------------------------------------

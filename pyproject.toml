@@ -14,6 +14,7 @@ dependencies = [
     "fastapi==0.138.0",
     "uvicorn==0.49.0",
     "pydantic==2.13.4",
+    "pyyaml==6.0.3",  # 4-A1: declared (was transitive) — the reflector composition root loads config/floor_registry.yaml.
     "qdrant-client==1.18.0",
 ]
 
@@ -80,6 +81,7 @@ module = [
     "langgraph_checkpoint_sqlite.*",
     "qdrant_client.*",
     "uvicorn.*",
+    "yaml.*",  # 4-A1/4-3: pyyaml 6.0.3 ships no findable stubs under strict mypy (the composition-root yaml load).
 ]
 ignore_missing_imports = true
 

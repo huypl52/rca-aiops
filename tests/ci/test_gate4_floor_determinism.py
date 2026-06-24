@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml  # type: ignore[import-untyped]  # third-party stubs not shipped (consistent w/ pyproject mypy override)
+import yaml  # third-party stubs not shipped → handled by the pyproject mypy override (yaml.* ignore_missing_imports)
 
 from graph.floor_check import (
     FloorRegistry,

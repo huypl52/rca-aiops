@@ -307,6 +307,24 @@ def build_compiled_graph(
 # ---------------------------------------------------------------------------
 
 
+def _partial_snapshot(state: InvestigationState) -> dict[str, JsonValue]:
+    """Snapshot for a PARTIAL (max-iter exhausted) outcome — Story 4.3 (FR-7 / AD-10 #5).
+
+    The base :func:`graph.runner._snapshot_from_state` projection PLUS the reflector's last
+    ``sufficiency`` verdict (which carries the honest "chưa đủ" ``gap`` on a floor-Fail). AD-10 #5:
+    max-iter exhaustion is OBSERVABLE (a PARTIAL carrying the gap), never a silent binary fail. The
+    verdict may be empty ``{}`` when the reflector never ran (e.g. the POC-default planner loops at
+    HYP↔VAL and never reaches REF) — that empty verdict is still honest (a PARTIAL, not a silent fail).
+    """
+    snapshot = _snapshot_from_state(state)
+    sufficiency = state.get("sufficiency")
+    # A PARTIAL ALWAYS carries a ``sufficiency`` key: the reflector's last verdict when REF ran, else an
+    # empty ``{}`` (the degenerate POC-default planner loops at HYP↔VAL and never reaches REF — still an
+    # observable, honest verdict; AD-10 #5). NEVER silent-omit it.
+    snapshot["sufficiency"] = dict(sufficiency) if isinstance(sufficiency, dict) else {}
+    return snapshot
+
+
 class CompiledGraphRunner(GraphRunner):
     """Concrete ``GraphRunner`` running the compiled §3.5 graph (AC2 seam + AC3 entry contract).
 
@@ -317,8 +335,13 @@ class CompiledGraphRunner(GraphRunner):
 
     Carry-forward 1-A4 (HARD): ``max_iterations`` is honored — the loop is BOUNDED (no infinite loop
     is possible). ``max_iterations`` maps to LangGraph's ``recursion_limit`` via a deterministic
-    multiplier (:data:`_NODES_PER_ITERATION`); exceeding it raises ``GraphRecursionError``, caught
-    here → ``status="failed"`` (lifecycle). The partial "chưa đủ" REPORT is REF/WRT — DEFERRED.
+    multiplier (:data:`_NODES_PER_ITERATION`); exceeding it raises ``GraphRecursionError``, caught here
+    → an honest PARTIAL (Story 4-3 / FR-7 / AD-10 #5): the run is streamed (mode ``values``) so the
+    last-seen full state — carrying the reflector's most-recent ``sufficiency.gap`` ("chưa đủ — cần thêm
+    X") — is projected via :func:`_partial_snapshot`. A PARTIAL is NOT a silent binary ``status="failed"``;
+    a genuine infra failure stays ``"failed"``. (The dispatcher currently maps an unknown runner status
+    to registry ``failed`` — production wiring of ``partial`` at the registry level is deferred Epic 5/6;
+    the runner-level outcome here is the honest signal.)
 
     ``report`` is ``None`` until the rca_writer node (5-1); the WRT stub emits ``{"report": None}``.
 
@@ -352,18 +375,29 @@ class CompiledGraphRunner(GraphRunner):
         state = create_initial_state(incident_id=investigation_id, trigger=dict(trigger))
         recursion_limit = max(max_iterations, 1) * self._nodes_per_iteration
 
+        # Story 4-3 (FR-7 / AD-10 #5): STREAM with ``stream_mode="values"`` (NOT the default
+        # ``"updates"`` — which yields per-node update dicts, not the full state) so the latest FULL state
+        # is captured even when the recursion cap fires mid-investigation. ``ainvoke`` does not surface a
+        # partial state on cap-exhaustion, so ``astream`` is required to project the reflector's last
+        # sufficiency.gap as an honest PARTIAL (NOT a silent binary "failed").
+        last_state: InvestigationState | None = None
         try:
-            final = await self._graph.ainvoke(state, config={"recursion_limit": recursion_limit})
+            async for chunk in self._graph.astream(
+                state, config={"recursion_limit": recursion_limit}, stream_mode="values"
+            ):
+                last_state = cast(InvestigationState, chunk)
         except GraphRecursionError:
-            # 1-A4: max_iterations exceeded → BOUNDED → lifecycle status="failed". The partial
-            # "chưa đủ" REPORT framing is REF/WRT (DEFERRED to 4.x/5-1) — not emitted here.
+            # max_iterations exceeded → BOUNDED → honest PARTIAL carrying the reflector's last
+            # sufficiency.gap ("chưa đủ — cần thêm X"). NOT a silent binary status="failed" — a genuine
+            # infra failure stays "failed"; cap-exhaustion is observable as a PARTIAL.
+            partial_state = last_state if last_state is not None else state
             return GraphRunnerResult(
-                status="failed",
-                state_snapshot=_snapshot_from_state(state),
+                status="partial",
+                state_snapshot=_partial_snapshot(partial_state),
                 report=None,
             )
 
-        final_state: InvestigationState = cast(InvestigationState, final)
+        final_state: InvestigationState = last_state if last_state is not None else state
         report_value = final_state.get("report")
         report: dict[str, JsonValue] | None = (
             report_value if isinstance(report_value, dict) else None
@@ -394,14 +428,22 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     DEFERRED until Epic 4/5 make the graph converge (the dispatcher module default stays
     ``ContextBuilderRunner``; Story 1-4 tests stay green).
     """
-    # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.nodes same layer). Kept inside this
-    # composition root so build_compiled_graph / CompiledGraphRunner / stubs stay tools-free (§2.7).
+    # LAZY imports (graph→tools FORWARD — LEGAL; graph→graph.* same layer). Kept inside this composition
+    # root so build_compiled_graph / CompiledGraphRunner / stubs stay tools-free (§2.7). Story 4-3 adds
+    # the floor-registry YAML load (4-A1: ``import yaml`` lives HERE — the composition root that calls
+    # load_floor_registry; the reflector NODE itself stays yaml-free / layer-pure).
+    from pathlib import Path
+
+    import yaml
+
+    from graph.floor_check import build_floor_check, load_floor_registry
     from graph.nodes.evidence_normalizer import build_evidence_normalizer
     from graph.nodes.executor_router import build_executor_router_node
     from graph.nodes.hypothesis_planner import build_hypothesis_planner
     from graph.nodes.incident_context_builder import incident_context_builder
     from graph.nodes.plan_validator import build_plan_validator
     from graph.nodes.preplanning_playbook_retriever import build_preplanning_playbook_retriever
+    from graph.nodes.reflector import build_reflector
     from tools.port import StubReadOnlyAdapter
     from tools.registry import build_default_registry
     from tools.router import ExecutorRouter
@@ -409,6 +451,20 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
     adapter = StubReadOnlyAdapter()
     registry = build_default_registry()
     router = ExecutorRouter(registry, adapter)
+
+    # 4-3: load the deterministic floor registry (config/floor_registry.yaml — the 4-1 LOCKED data
+    # location) → build the floor checker → build the REAL reflector. The POC default registry is EMPTY
+    # → every trigger fail-closed (the honest degenerate state, D3; mirrors 3.5's honest default
+    # planner). The checker is built ONCE + injected (DEC-3: the pure 4.1 mechanism, consumed not
+    # modified). ``floors`` is wrapped under the ``floors:`` key (NOT bare top-level).
+    floor_yaml_path = Path(__file__).resolve().parent.parent / "config" / "floor_registry.yaml"
+    with floor_yaml_path.open(encoding="utf-8") as floor_file:
+        floor_doc = yaml.safe_load(floor_file) or {}
+    floors_raw = floor_doc.get("floors") if isinstance(floor_doc, Mapping) else {}
+    floors = floors_raw if isinstance(floors_raw, Mapping) else {}
+    floor_registry = load_floor_registry(floors)
+    floor_checker = build_floor_check(registry=floor_registry)
+    reflector = build_reflector(floor_checker=floor_checker)
 
     hypothesis_planner = build_plan_promoting_planner(
         build_hypothesis_planner(max_hypotheses=max_hypotheses)
@@ -422,6 +478,9 @@ def build_default_compiled_runner(*, max_hypotheses: int = 5) -> CompiledGraphRu
         # 4-2: the REAL evidence_normalizer (was the 3-5 DEFERRED stub). The stub stays the DI-param
         # default (a no-op ENV is a valid test/composition choice — floor_check-stub discipline).
         evidence_normalizer=build_evidence_normalizer(),
+        # 4-3: the REAL reflector (was the 3-5 DEFERRED stub). The stub stays the DI-param default (a
+        # no-op "always write" REF is a valid test/composition choice — e.g. the 3-5 happy-path runner).
+        reflector=reflector,
     )
     return CompiledGraphRunner(graph)
 
