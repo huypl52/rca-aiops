@@ -53,4 +53,4 @@ See `ci/GATES.md` for the 6-gate reference. Story 0.1 wires #1 + #2 (HARD-FAIL);
 
 ## Status
 
-Story 0.1 (scaffold + CI gates #1/#2) — see `_bmad-output/implementation-artifacts/0-1-scaffold-ci-gates.md`.
+Story 0.1 (scaffold + CI gates #1/#2) completed.

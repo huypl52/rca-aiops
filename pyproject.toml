@@ -52,7 +52,7 @@ packages = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["_bmad", "_bmad-output", "docs", ".venv"]
+extend-exclude = ["docs", ".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]
@@ -76,7 +76,7 @@ python_version = "3.12"
 strict = true
 # Scaffold has no business code yet; allow untyped/empty modules without noise.
 # Each story that adds code tightens as needed.
-exclude = "^(_bmad|_bmad-output|docs|\\.venv)/"
+exclude = "^(docs|\\.venv)/"
 
 [[tool.mypy.overrides]]
 # Third-party stubs not shipped — relax missing-stubs noise for the runtime deps.
