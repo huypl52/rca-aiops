@@ -47,7 +47,11 @@ def test_alertmanager_envelope_round_trips_to_valid_incident_trigger() -> None:
                 "fingerprint": "fp-old",
                 "startsAt": "2026-06-24T09:50:00Z",
                 "endsAt": "2026-06-24T09:55:00Z",
-                "labels": {"alertname": "DependencyTimeout", "service": "order", "severity": "critical"},
+                "labels": {
+                    "alertname": "DependencyTimeout",
+                    "service": "order",
+                    "severity": "critical",
+                },
                 "annotations": {"summary": "old alert", "description": "old alert"},
             },
             {
@@ -55,7 +59,11 @@ def test_alertmanager_envelope_round_trips_to_valid_incident_trigger() -> None:
                 "fingerprint": "fp-prom-deptimeout",
                 "startsAt": "2026-06-24T10:00:00Z",
                 "endsAt": "2026-06-24T10:05:00Z",
-                "labels": {"alertname": "DependencyTimeout", "service": "order", "severity": "critical"},
+                "labels": {
+                    "alertname": "DependencyTimeout",
+                    "service": "order",
+                    "severity": "critical",
+                },
                 "annotations": {
                     "summary": "order dependency timeout",
                     "description": "payment unreachable",

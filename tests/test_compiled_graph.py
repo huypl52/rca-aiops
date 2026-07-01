@@ -299,7 +299,7 @@ def test_plan_promotion_prefers_first_unexecuted_identity() -> None:
                     "priority": 1,
                     "plan": {
                         "tool": "query_prometheus_raw",
-                        "query": "up{service=\"checkout\"}",
+                        "query": 'up{service="checkout"}',
                         "timestamp_range": {"start": "s", "end": "e"},
                     },
                     "status": "open",

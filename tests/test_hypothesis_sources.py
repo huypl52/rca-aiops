@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import httpx
 import pytest
@@ -76,7 +77,11 @@ def test_configured_source_falls_back_when_key_missing(
 )
 def test_provider_error_falls_back_to_executable_prometheus_source(
     monkeypatch: pytest.MonkeyPatch,
-    sample_inputs: tuple[Mapping[str, JsonValue], Sequence[Mapping[str, JsonValue]], Sequence[Mapping[str, JsonValue]]],
+    sample_inputs: tuple[
+        Mapping[str, JsonValue],
+        Sequence[Mapping[str, JsonValue]],
+        Sequence[Mapping[str, JsonValue]],
+    ],
     provider: str,
     key_env: str,
 ) -> None:
@@ -97,10 +102,11 @@ def test_provider_error_falls_back_to_executable_prometheus_source(
     assert len(result) == 3
     assert [item["priority"] for item in result] == [1, 2, 3]
     for item in result:
+        plan = cast(dict[str, JsonValue], item["plan"])
         assert item["status"] == "proposed"
-        assert item["plan"]["tool"] == "query_prometheus_raw"
-        assert isinstance(item["plan"]["query"], str) and item["plan"]["query"]
-        assert item["plan"]["timestamp_range"] == context["time_window"]
+        assert plan["tool"] == "query_prometheus_raw"
+        assert isinstance(plan["query"], str) and plan["query"]
+        assert plan["timestamp_range"] == context["time_window"]
 
 
 @pytest.mark.parametrize(
@@ -171,7 +177,11 @@ def test_provider_error_falls_back_to_executable_prometheus_source(
 )
 def test_valid_llm_output_is_normalized_and_uses_provider_wiring(
     monkeypatch: pytest.MonkeyPatch,
-    sample_inputs: tuple[Mapping[str, JsonValue], Sequence[Mapping[str, JsonValue]], Sequence[Mapping[str, JsonValue]]],
+    sample_inputs: tuple[
+        Mapping[str, JsonValue],
+        Sequence[Mapping[str, JsonValue]],
+        Sequence[Mapping[str, JsonValue]],
+    ],
     provider: str,
     key_env: str,
     endpoint: str,
@@ -244,7 +254,11 @@ def test_valid_llm_output_is_normalized_and_uses_provider_wiring(
 
 def test_non_executable_llm_plan_falls_back_to_prometheus_queries(
     monkeypatch: pytest.MonkeyPatch,
-    sample_inputs: tuple[Mapping[str, JsonValue], Sequence[Mapping[str, JsonValue]], Sequence[Mapping[str, JsonValue]]],
+    sample_inputs: tuple[
+        Mapping[str, JsonValue],
+        Sequence[Mapping[str, JsonValue]],
+        Sequence[Mapping[str, JsonValue]],
+    ],
 ) -> None:
     context, playbook_hits, evidence = sample_inputs
     monkeypatch.setenv("RCA_HYPOTHESIS_LLM_ENABLED", "1")
@@ -276,8 +290,10 @@ def test_non_executable_llm_plan_falls_back_to_prometheus_queries(
     result = source(context, playbook_hits, evidence)
 
     assert len(result) == 3
-    assert all(item["plan"]["tool"] == "query_prometheus_raw" for item in result)
-    assert all(item["plan"]["timestamp_range"] == context["time_window"] for item in result)
+    for item in result:
+        plan = cast(dict[str, JsonValue], item["plan"])
+        assert plan["tool"] == "query_prometheus_raw"
+        assert plan["timestamp_range"] == context["time_window"]
 
 
 def test_default_compiled_runner_uses_env_gated_llm_source(

@@ -177,7 +177,9 @@ def default_deterministic_confidence_assessor(evidence: Sequence[Mapping[str, ob
     No LLM, no wall-clock, no random, no IO (AD-12). The assessor is ONLY consulted on floor-Pass
     (DEC-3) — it can NEVER override a deterministic floor-Fail. Returned value is clamped to ``[0, 1]``.
     """
-    grounded = [item for item in evidence if isinstance(item, Mapping) and _is_grounded_evidence(item)]
+    grounded = [
+        item for item in evidence if isinstance(item, Mapping) and _is_grounded_evidence(item)
+    ]
     count = len(grounded)
     if not count:
         return _CONFIDENCE_FLOOR  # no grounded evidence → zero confidence (AD-7 honest)

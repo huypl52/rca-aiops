@@ -125,7 +125,7 @@ def _hypothesis(
     hid: str,
     *,
     tool: str = "query_prometheus_raw",
-    query: str = 'rate(http_requests_total[5m])',
+    query: str = "rate(http_requests_total[5m])",
     timestamp_range: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     """A hypothesis whose plan can be matched exactly against an EXR tool_call identity."""

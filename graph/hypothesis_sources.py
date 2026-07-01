@@ -186,7 +186,9 @@ def _prometheus_query_fallback(
     still deterministic and read-only.
     """
     del playbook_hits, evidence
-    service = context.get("service") if isinstance(context.get("service"), str) else "unknown-service"
+    service = (
+        context.get("service") if isinstance(context.get("service"), str) else "unknown-service"
+    )
     namespace = context.get("namespace") if isinstance(context.get("namespace"), str) else "default"
     time_window = context.get("time_window")
     if not isinstance(time_window, Mapping):

@@ -219,9 +219,7 @@ def _canonical_json_text(value: object) -> str | None:
         return None
 
 
-def _matching_hypothesis_ids(
-    hypotheses: object, record: Mapping[str, object]
-) -> list[str]:
+def _matching_hypothesis_ids(hypotheses: object, record: Mapping[str, object]) -> list[str]:
     """Exact-match ``supports`` ids for the originating tool_call identity ``{tool, query, timestamp_range}``.
 
     The EXR/router ``record.query`` field is the CANONICAL JSON of every identifying plan kwarg EXCEPT
@@ -349,7 +347,9 @@ def build_evidence_normalizer(
                 "summary": summary,
                 "raw_excerpt": _raw_excerpt(raw),  # NON-NULL citation (AD-6) — derived from raw
                 "confidence": None,  # honest default; DERIVED by reflector 4-3, NOT ENV
-                "supports": cast(JsonValue, supports),  # exact-match linkage; unmatched stays honest-empty
+                "supports": cast(
+                    JsonValue, supports
+                ),  # exact-match linkage; unmatched stays honest-empty
                 "contradicts": [],  # honest empty; no deterministic contradiction source yet
             }
 

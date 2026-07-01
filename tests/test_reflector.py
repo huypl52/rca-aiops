@@ -111,7 +111,9 @@ def _prom_evidence(name: str = "checkout") -> dict[str, JsonValue]:
     return {"source_type": "prometheus", "source_name": name, "query": "up", "summary": "s"}
 
 
-def _grounded_prom_evidence(name: str = "checkout", supports: list[str] | None = None) -> dict[str, JsonValue]:
+def _grounded_prom_evidence(
+    name: str = "checkout", supports: list[str] | None = None
+) -> dict[str, JsonValue]:
     """A writer-grade grounded evidence item: floor-match fields + citation + hypothesis linkage."""
     evidence = _prom_evidence(name)
     evidence["raw_excerpt"] = '{"metric":"up"}'

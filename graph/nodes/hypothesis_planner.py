@@ -119,6 +119,7 @@ def _rule_based_source(
     the service + evidence gathered so far) and now contribute to the deterministic ranking scaffold.
     Each descriptor carries ``priority``/``plan``/``status`` and NO ``id`` (the node stamps it).
     """
+
     def _tokens(value: object) -> set[str]:
         if not isinstance(value, str) or not value:
             return set()
@@ -126,7 +127,8 @@ def _rule_based_source(
 
     def _score(hit: Mapping[str, JsonValue]) -> tuple[float, int, str, str]:
         title = hit.get("title")
-        hint_tokens = _tokens(title) | _tokens(hit.get("id"))
+        playbook_id = hit.get("id")
+        hint_tokens = _tokens(title) | _tokens(playbook_id)
         evidence_tokens: set[str] = set()
         service = context.get("service")
         namespace = context.get("namespace")
@@ -138,13 +140,17 @@ def _rule_based_source(
             for field in ("source_name", "source_type", "query", "summary", "raw_excerpt"):
                 evidence_tokens |= _tokens(item.get(field))
         base_score = hit.get("score")
-        score = float(base_score) if isinstance(base_score, int | float) and not isinstance(base_score, bool) else 0.0
+        score = (
+            float(base_score)
+            if isinstance(base_score, int | float) and not isinstance(base_score, bool)
+            else 0.0
+        )
         support = len(hint_tokens & evidence_tokens)
         return (
             score,
             support,
             title if isinstance(title, str) else "",
-            hit.get("id") if isinstance(hit.get("id"), str) else "",
+            playbook_id if isinstance(playbook_id, str) else "",
         )
 
     ranked_hits = [pb for pb in playbook_hits if isinstance(pb, Mapping)]
@@ -242,7 +248,9 @@ def _comparison_artifact(
     ranked_candidates: list[dict[str, JsonValue]] = []
     for idx, descriptor in enumerate(descriptors):
         hypothesis = (
-            hypotheses[idx] if idx < len(hypotheses) and isinstance(hypotheses[idx], Mapping) else {}
+            hypotheses[idx]
+            if idx < len(hypotheses) and isinstance(hypotheses[idx], Mapping)
+            else {}
         )
         plan = descriptor.get("plan")
         plan_mapping = plan if isinstance(plan, Mapping) else {}
@@ -253,12 +261,14 @@ def _comparison_artifact(
         support = len(playbook_tokens & evidence_tokens)
         ranked_candidates.append(
             {
-                "hypothesis_id": cast(JsonValue, hypothesis.get("id")),
+                "hypothesis_id": hypothesis.get("id"),
                 "playbook_id": cast(JsonValue, playbook_id if isinstance(playbook_id, str) else ""),
                 "playbook_title": cast(JsonValue, title if isinstance(title, str) else ""),
                 "score": cast(
                     JsonValue,
-                    score if isinstance(score, int | float) and not isinstance(score, bool) else 0.0,
+                    score
+                    if isinstance(score, int | float) and not isinstance(score, bool)
+                    else 0.0,
                 ),
                 "support": support,
             }

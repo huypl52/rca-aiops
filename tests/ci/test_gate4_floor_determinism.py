@@ -312,7 +312,14 @@ def test_shipped_registry_still_fails_closed_for_unknown_trigger() -> None:
     checker = build_floor_check(registry=load_floor_registry(floors))
     r = checker(
         "PodCrashLooping",
-        [{"source_type": "prometheus", "source_name": "order-service", "query": "q", "summary": "s"}],
+        [
+            {
+                "source_type": "prometheus",
+                "source_name": "order-service",
+                "query": "q",
+                "summary": "s",
+            }
+        ],
     )
     assert isinstance(r, FloorResult)
     assert r.floor_pass is False
