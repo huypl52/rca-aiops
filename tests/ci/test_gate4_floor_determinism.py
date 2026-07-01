@@ -268,9 +268,9 @@ def test_load_floor_registry_rejects_bad_version(bad_version: object) -> None:
 def test_shipped_floor_registry_yaml_loads_cleanly() -> None:
     """(b) The SHIPPED config/floor_registry.yaml passes load_floor_registry (schema-validate-on-real-data).
 
-    The POC default is EMPTY (D3 content DEFERRED — honest fail-closed-for-all); this proves the shipped
-    data + version tag are well-formed under the locked schema (a malformed YAML would be a silent
-    production regression caught here, at gate time).
+    The shipped registry now seeds the demo DependencyTimeout path while preserving the locked schema,
+    version tag, and fail-fast load behavior. A malformed YAML would still be a silent production
+    regression caught here, at gate time.
     """
     raw = yaml.safe_load(_FLOOR_REGISTRY_YAML.read_text(encoding="utf-8"))
     assert isinstance(raw, dict), "floor_registry.yaml must parse to a mapping at top level"
@@ -280,12 +280,18 @@ def test_shipped_floor_registry_yaml_loads_cleanly() -> None:
     # The composition root (4.3) will pass the parsed `floors` mapping to load_floor_registry.
     reg = load_floor_registry(floors, version=int(version) if isinstance(version, int) else 1)
     assert isinstance(reg, FloorRegistry)
-    assert reg.version == 1  # POC default version (D3 content deferred)
-    assert len(reg.specs) == 0  # EMPTY honest default (no invented rules)
+    assert reg.version == 1
+    assert "DependencyTimeout" in reg.specs
+    spec = reg.specs["DependencyTimeout"]
+    assert spec.min_count == 1
+    assert spec.source_type == "prometheus"
+    assert spec.matcher.field == "source_name"
+    assert spec.matcher.op == "label-exact"
+    assert spec.matcher.value == "order-service"
 
 
 def test_empty_registry_is_honest_fail_closed_for_all() -> None:
-    """(b) The shipped EMPTY registry → build_default_floor_check fails-closed for EVERY trigger."""
+    """(b) The code-level empty default checker still fails-closed for EVERY trigger."""
     checker = build_default_floor_check()
     for trigger in ("HTTPErrorRateSpike", "DNSFailureLogSpike", "PodCrashLooping", ""):
         r = checker(
@@ -295,3 +301,19 @@ def test_empty_registry_is_honest_fail_closed_for_all() -> None:
         assert isinstance(r, FloorResult)
         assert r.floor_pass is False
         assert r.reason == "fail-closed: unknown-trigger"
+
+
+def test_shipped_registry_still_fails_closed_for_unknown_trigger() -> None:
+    """(b) A shipped demo rule does not relax unknown-trigger fail-closed behavior."""
+    raw = yaml.safe_load(_FLOOR_REGISTRY_YAML.read_text(encoding="utf-8"))
+    assert isinstance(raw, dict)
+    floors = raw.get("floors", {})
+    assert isinstance(floors, dict)
+    checker = build_floor_check(registry=load_floor_registry(floors))
+    r = checker(
+        "PodCrashLooping",
+        [{"source_type": "prometheus", "source_name": "order-service", "query": "q", "summary": "s"}],
+    )
+    assert isinstance(r, FloorResult)
+    assert r.floor_pass is False
+    assert r.reason == "fail-closed: unknown-trigger"

@@ -12,7 +12,7 @@ Covers the DEEP-review spotlights for Story 3.5:
     contains NO ``compiled``/``StateGraph``/``CompiledGraphRunner`` reference (the plug is composition-root).
   - **entry contract + GraphRunner Protocol**: ``CompiledGraphRunner`` is a structural ``GraphRunner``;
     its ``run`` honors ``(trigger, investigation_id, max_iterations)`` and returns the registry result.
-  - **spine + determinism**: 13-key spine preserved; two identical runs yield identical snapshots (AD-12).
+  - **spine + determinism**: 14-key spine preserved; two identical runs yield identical snapshots (AD-12).
 
 AST-discipline (docstring-immune): assertions are statement-level.
 """
@@ -253,12 +253,12 @@ def test_ac2_seam_services_dispatch_does_not_reference_compiled_graph() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Spine — 13-key InvestigationState preserved (no new key introduced by 3.5)
+# Spine — 13-key InvestigationState preserved
 # ---------------------------------------------------------------------------
 
 
-def test_spine_remains_thirteen_keys() -> None:
-    """3.5 introduces NO new spine key — create_initial_state still yields the 13-key AD-9 spine."""
+def test_spine_remains_fourteen_keys() -> None:
+    """3.5 adds NO spine key — create_initial_state yields the 13-key spine."""
     state = create_initial_state(incident_id="inv-spine", trigger=_TRIGGER)
     assert len(InvestigationState.__annotations__) == 13
     assert "plan" in state and "tool_calls" in state and "next_action" in state
@@ -285,6 +285,54 @@ def test_plan_promotion_picks_lowest_priority_then_id() -> None:
     planner = build_plan_promoting_planner(_planner)
     out = planner(create_initial_state())
     assert out["plan"] == {"tool": "a"}  # priority 1, id H01 < H03
+
+
+def test_plan_promotion_prefers_first_unexecuted_identity() -> None:
+    """On replan, promotion advances deterministically to the first hypothesis not yet dispatched."""
+
+    def _planner(state: InvestigationState) -> dict[str, JsonValue]:
+        del state
+        return {
+            "hypotheses": [
+                {
+                    "id": "H01",
+                    "priority": 1,
+                    "plan": {
+                        "tool": "query_prometheus_raw",
+                        "query": "up{service=\"checkout\"}",
+                        "timestamp_range": {"start": "s", "end": "e"},
+                    },
+                    "status": "open",
+                },
+                {
+                    "id": "H02",
+                    "priority": 2,
+                    "plan": {
+                        "tool": "query_prometheus_raw",
+                        "query": "rate(http_requests_total[5m])",
+                        "timestamp_range": {"start": "s", "end": "e"},
+                    },
+                    "status": "open",
+                },
+            ]
+        }
+
+    planner = build_plan_promoting_planner(_planner)
+    state = create_initial_state()
+    state["tool_calls"] = [
+        {
+            "tool": "query_prometheus_raw",
+            "query": '{"query": "up{service=\\"checkout\\"}"}',
+            "timestamp_range": '{"end": "e", "start": "s"}',
+            "raw": {},
+        }
+    ]
+    out = planner(state)
+    assert out["plan"] == {
+        "tool": "query_prometheus_raw",
+        "query": "rate(http_requests_total[5m])",
+        "timestamp_range": {"start": "s", "end": "e"},
+    }
 
 
 def test_plan_promotion_empty_hypotheses_leaves_no_plan() -> None:

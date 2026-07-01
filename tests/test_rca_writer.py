@@ -11,7 +11,7 @@ twin of DEC-3 on the loop side):
     from ``sufficiency`` — the writer PROJECTS, never recomputes (a sufficiency whose value a re-derivation
     would estimate differently is projected AS-IS). ``None`` when ``sufficiency`` is absent/non-dict.
   - **AD-9 (report is a STATE DICT, NOT a Pydantic model)**: the report is a plain JSON-safe ``dict`` on the
-    13-key spine (key #13 ``report``); there is NO ``models/report.py``; the node imports NO pydantic.
+    14-key spine (key #14 ``report``); there is NO ``models/report.py``; the node imports NO pydantic.
   - **AD-12 determinism**: same state → identical report across calls AND across PYTHONHASHSEED (every
     emitted list is sorted by an explicit tuple key).
   - **FR-9 / 6-key report shape**: ``{root_cause, evidence_backing, confidence, open_questions,
@@ -809,12 +809,12 @@ def test_ad9_no_pydantic_import_in_wrt_node() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AD-9 spine — 13 keys unchanged (5-1 adds NO spine key; report pre-exists)
+# AD-9 spine — 13 keys unchanged (5-1 report pre-exists)
 # ---------------------------------------------------------------------------
 
 
 def test_spine_unchanged_thirteen_keys() -> None:
-    """5-1 adds NO spine key — ``report`` (key #13) pre-exists; the spine stays 13 keys."""
+    """5-1 adds NO spine key — ``report`` pre-exists; the spine stays 13 keys."""
     assert len(InvestigationState.__annotations__) == 13
 
 

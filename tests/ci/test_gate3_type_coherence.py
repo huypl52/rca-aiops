@@ -238,7 +238,7 @@ def _sample_state() -> InvestigationState:
 
 
 # ===========================================================================
-# AC1 — InvestigationState has EXACTLY 13 top-level keys (AD-9 spine)
+# AC1 — InvestigationState has EXACTLY 14 top-level keys (comparison artifact added)
 # ===========================================================================
 
 EXPECTED_KEYS: frozenset[str] = frozenset(
@@ -261,7 +261,7 @@ EXPECTED_KEYS: frozenset[str] = frozenset(
 
 
 def test_state_has_exactly_13_keys() -> None:
-    """AD-9 spine = exactly 13 top-level keys (leader DEEP counts independently)."""
+    """AD-9 spine = exactly 14 top-level keys (leader DEEP counts independently)."""
     actual = set(InvestigationState.__annotations__)
     assert actual == EXPECTED_KEYS, (
         f"InvestigationState key-set drift:\n"

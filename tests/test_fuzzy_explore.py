@@ -5,7 +5,7 @@ Covers the ACs / leader DEEP spotlights (pattern-contract / graph-correctness st
            agent identifier in module LOGIC; docstring documents the A1 decision + the discarded
            "degrade ReAct cho fuzzy" (PRD memlog line 12); no new §3.5 node (delivers a module, not a
            node); node returns exactly ``{"hypotheses": ...}``.
-  - AC2 — NO new node / edge / state-key; manifests as hypotheses entries. Spine still 13 keys (no
+  - AC2 — NO new node / edge / state-key; manifests as hypotheses entries. Spine still 14 keys (no
            fuzzy/explore key added); expansion BOUNDED (no self-recursion / no loop), capped by
            max_hypotheses; AC2 (max-iter→partial) is documented as 3.5+4.x, NOT built here.
   - AC3 — REUSE 3.2 (zero duplication): delegates id-stamping (H01..) + shape + merge to

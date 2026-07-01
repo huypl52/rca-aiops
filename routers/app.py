@@ -27,6 +27,13 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(investigations_router)
 
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        # Lightweight liveness/readiness probe target for Kubernetes.
+        # Does NOT check downstream dependencies — that would couple pod lifecycle
+        # to external services. TCP/HTTP 200 = process alive and serving.
+        return {"status": "ok"}
+
     @app.exception_handler(NormalizeError)
     async def normalize_error_handler(_: Request, exc: NormalizeError) -> JSONResponse:
         # Domain rejection (missing field / unknown canonical) → 422 envelope.

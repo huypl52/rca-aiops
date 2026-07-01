@@ -38,6 +38,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
+import yaml
+
 from graph.compiled import (
     NA_GATHER_MORE,
     NA_PROCEED,
@@ -68,6 +70,7 @@ from graph.state import InvestigationState, JsonValue, create_initial_state
 _REFLECTOR_PATH = Path("graph/nodes/reflector.py")
 _REFLECTOR_SRC = _REFLECTOR_PATH.read_text(encoding="utf-8")
 _REFLECTOR_TREE = ast.parse(_REFLECTOR_SRC)
+_FLOOR_REGISTRY_YAML = Path("config/floor_registry.yaml")
 
 # A registry with ONE floor rule: DependencyTimeout PASSES when >=2 prometheus/checkout evidence match.
 _REG_CHECKER: FloorChecker = build_floor_check(
@@ -106,6 +109,14 @@ def _state(
 def _prom_evidence(name: str = "checkout") -> dict[str, JsonValue]:
     """A prometheus/checkout evidence item that MATCHES the registry floor rule."""
     return {"source_type": "prometheus", "source_name": name, "query": "up", "summary": "s"}
+
+
+def _grounded_prom_evidence(name: str = "checkout", supports: list[str] | None = None) -> dict[str, JsonValue]:
+    """A writer-grade grounded evidence item: floor-match fields + citation + hypothesis linkage."""
+    evidence = _prom_evidence(name)
+    evidence["raw_excerpt"] = '{"metric":"up"}'
+    evidence["supports"] = cast(JsonValue, supports if supports is not None else ["H01"])
+    return evidence
 
 
 def _pass_checker(matched: int = 2, min_count: int = 1, reason: str = "pass") -> FloorChecker:
@@ -243,13 +254,32 @@ def test_categorical_band_boundaries() -> None:
 
 
 def test_default_assessor_monotonic_bounded_and_saturating() -> None:
-    """AD-7/AD-12: default assessor is bounded [0,1], monotonic, saturating (count-based)."""
+    """AD-7/AD-12: default assessor is bounded [0,1], monotonic, saturating on grounded evidence."""
     assert default_deterministic_confidence_assessor([]) == 0.0
-    assert default_deterministic_confidence_assessor([_prom_evidence()]) == 0.25
-    four = [_prom_evidence() for _ in range(4)]
+    assert default_deterministic_confidence_assessor([_grounded_prom_evidence()]) == 0.25
+    four = [_grounded_prom_evidence() for _ in range(4)]
     assert default_deterministic_confidence_assessor(four) == 1.0
-    ten = [_prom_evidence() for _ in range(10)]
+    ten = [_grounded_prom_evidence() for _ in range(10)]
     assert default_deterministic_confidence_assessor(ten) == 1.0  # saturated
+
+
+def test_default_assessor_ignores_ungrounded_evidence_volume() -> None:
+    """Ungrounded evidence must not inflate confidence when it cannot back a writer-grade claim."""
+    evidence = [_prom_evidence() for _ in range(10)]
+    assert default_deterministic_confidence_assessor(evidence) == 0.0
+    mixed = evidence + [_grounded_prom_evidence()]
+    assert default_deterministic_confidence_assessor(mixed) == 0.25
+
+
+def test_floor_pass_with_default_assessor_replans_when_evidence_is_ungrounded() -> None:
+    """Even after a floor pass, ungrounded evidence should not route straight to write by default."""
+    node = build_reflector(
+        floor_checker=_pass_checker(), confidence_assessor=default_deterministic_confidence_assessor
+    )
+    out = node(_state(evidence=[_prom_evidence() for _ in range(4)]))
+    suff = cast(dict[str, JsonValue], out["sufficiency"])
+    assert suff["ceiling_confidence"] == 0.0
+    assert out["next_action"] == NA_REPLAN
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +321,33 @@ def test_real_floor_unknown_trigger_fail_closed() -> None:
     assert suff["floor_pass"] is False
     assert "fail-closed" in cast(str, suff["floor_reason"])
     assert out["next_action"] == NA_GATHER_MORE
+
+
+def test_shipped_default_floor_dependency_timeout_demo_path_can_write() -> None:
+    """The shipped demo floor lets DependencyTimeout/order-service evidence route past gather_more."""
+    raw = yaml.safe_load(_FLOOR_REGISTRY_YAML.read_text(encoding="utf-8"))
+    assert isinstance(raw, dict)
+    floors = raw.get("floors", {})
+    assert isinstance(floors, dict)
+    checker = build_floor_check(registry=load_floor_registry(floors))
+    node = build_reflector(floor_checker=checker, confidence_assessor=_assessor(0.9))
+    out = node(
+        _state(
+            evidence=[
+                {
+                    "source_type": "prometheus",
+                    "source_name": "order-service",
+                    "query": "up",
+                    "summary": "dependency timeout metrics",
+                }
+            ]
+        )
+    )
+    suff = cast(dict[str, JsonValue], out["sufficiency"])
+    assert suff["floor_pass"] is True
+    assert suff["matched_count"] == 1
+    assert suff["min_count"] == 1
+    assert out["next_action"] == NA_WRITE
 
 
 def test_canonical_trigger_read_defensively_missing_trigger() -> None:
@@ -435,7 +492,7 @@ def test_determinism_same_inputs_identical_verdict_in_process() -> None:
 
 
 def test_determinism_order_independent_evidence() -> None:
-    """count-based floor + assessor → the SAME evidence SET in any order → identical verdict."""
+    """Grounded-count floor + assessor → the SAME evidence SET in any order → identical verdict."""
     node = build_reflector(
         floor_checker=_REG_CHECKER, confidence_assessor=default_deterministic_confidence_assessor
     )

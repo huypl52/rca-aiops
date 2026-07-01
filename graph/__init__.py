@@ -1,7 +1,7 @@
 """LangGraph PE-R graph package (AD-9 / AD-2).
 
 Story 0.3 implements the **graph state spine**:
-  - `InvestigationState` — plain JSON-safe `TypedDict`, 13 top-level keys (AD-9)
+  - `InvestigationState` — plain JSON-safe `TypedDict`, 14 top-level keys (AD-9)
   - reducer functions (append+dedupe / upsert-by-id / merge) wired via
     `Annotated[<type>, <reducer>]` (AD-4 / AD-10)
   - `create_initial_state()` factory + `SCHEMA_VERSION` / `assert_schema_version`

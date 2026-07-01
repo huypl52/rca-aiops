@@ -46,8 +46,11 @@ LOCKED MECHANISM (do NOT redesign — defer only summarizer CONTENT):
          ``raw`` (sorted keys) — the AD-6 citation backing any root-cause claim. Always present for a
          dispatched record (raw is populated). DERIVED from raw, never fabricated.
        - ``confidence`` (optional-nullable) ← ``None`` (honest; DERIVED by the reflector 4-3, NOT ENV).
-       - ``supports`` / ``contradicts`` (derived lists) ← ``[]`` (honest empty; filled downstream by
-         reflector/normalizer; NEVER null, NEVER fabricated tags).
+       - ``supports`` (derived list) ← exact-match hypothesis ids whose ``plan`` matches the originating
+         tool_call identity ``{tool, query, timestamp_range}``; ambiguous/no-match stays ``[]`` (honest,
+         deterministic, never guessed).
+       - ``contradicts`` (derived list) ← ``[]`` (honest empty; no deterministic contradiction source in
+         the current production path).
 
   4. **Port gate (AC4 no-guessing + Constraint 5 never-raise).** Build the candidate dict per (3), then
      validate AT THE PORT: ``Evidence.model_validate(candidate)`` (Pydantic v2 — AD-9: Pydantic ONLY here;
@@ -204,13 +207,83 @@ def _raw_excerpt(raw: Mapping[str, object]) -> str:
     return _bounded(blob, _RAW_EXCERPT_BUDGET)
 
 
+def _canonical_json_text(value: object) -> str | None:
+    """Canonical JSON text for deterministic identity comparison; None when ``value`` is not JSON-shaped.
+
+    Used to compare a hypothesis plan's structured ``timestamp_range`` with the executor record's canonical
+    JSON string without guessing or relying on dict insertion order.
+    """
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001 — defensive: malformed/non-serializable values simply do not match
+        return None
+
+
+def _matching_hypothesis_ids(
+    hypotheses: object, record: Mapping[str, object]
+) -> list[str]:
+    """Exact-match ``supports`` ids for the originating tool_call identity ``{tool, query, timestamp_range}``.
+
+    The EXR/router ``record.query`` field is the CANONICAL JSON of every identifying plan kwarg EXCEPT
+    ``timestamp_range`` (mirrors the router dedupe key shape), so support linkage must compare against the
+    PLAN'S canonical identifying kwargs — not against a raw ``plan.query`` string directly. A hypothesis
+    therefore contributes only when:
+      - it is a Mapping with a non-empty ``id``;
+      - ``plan.tool`` exactly matches ``record.tool``;
+      - canonical JSON of ``plan`` minus ``{tool, timestamp_range}`` exactly matches ``record.query``;
+      - canonical JSON of ``plan.timestamp_range`` exactly matches ``record.timestamp_range``.
+
+    Missing / malformed / ambiguous shapes degrade honestly to no support. The result is deduped in encounter
+    order and never raises.
+    """
+    if not isinstance(hypotheses, list):
+        return []
+    record_tool = record.get("tool")
+    record_query = record.get("query")
+    record_timestamp_range = record.get("timestamp_range")
+    if (
+        not isinstance(record_tool, str)
+        or not record_tool
+        or not isinstance(record_query, str)
+        or not record_query
+        or not isinstance(record_timestamp_range, str)
+        or not record_timestamp_range
+    ):
+        return []
+
+    matched: list[str] = []
+    for hypothesis in hypotheses:
+        if not isinstance(hypothesis, Mapping):
+            continue
+        hypothesis_id = hypothesis.get("id")
+        plan = hypothesis.get("plan")
+        if not isinstance(hypothesis_id, str) or not hypothesis_id or not isinstance(plan, Mapping):
+            continue
+        tool = plan.get("tool")
+        timestamp_range = _canonical_json_text(plan.get("timestamp_range"))
+        identifying_query = _canonical_json_text(
+            {key: value for key, value in plan.items() if key not in {"tool", "timestamp_range"}}
+        )
+        if (
+            isinstance(tool, str)
+            and tool == record_tool
+            and isinstance(identifying_query, str)
+            and identifying_query == record_query
+            and timestamp_range == record_timestamp_range
+            and hypothesis_id not in matched
+        ):
+            matched.append(hypothesis_id)
+    return matched
+
+
 def build_evidence_normalizer(
     *, summarizer: EvidenceSummarizer = default_deterministic_summarizer
 ) -> Callable[[InvestigationState], dict[str, JsonValue]]:
     """Factory: build the §3.5 evidence_normalizer (ENV) node (DI seam — mirrors 1-3/3-1/3-2/3-3/3-4/3.5).
 
     Returns a node ``(state) -> partial-state-dict`` that:
-      - reads ``state["tool_calls"]`` (already-dispatched records) + ``state["context"]`` defensively;
+      - reads ``state["tool_calls"]`` (already-dispatched records) + ``state["context"]`` +
+        ``state["hypotheses"]`` defensively;
       - for EACH record, derives the 9 Evidence fields per the LOCKED precedence (§3), building a candidate
         dict; a record whose raw misses a REQUIRED field (source_type / resolvable source_name / query /
         a valid window — raw's OWN ``time_window`` OR the incident ``context["time_window"]``) is DROPPED
@@ -233,6 +306,7 @@ def build_evidence_normalizer(
             return {"evidence": []}
         context_raw = state.get("context")
         context: Mapping[str, object] = context_raw if isinstance(context_raw, Mapping) else {}
+        hypotheses = state.get("hypotheses")
 
         evidence_list: list[dict[str, JsonValue]] = []
         for record in tool_calls:
@@ -264,6 +338,8 @@ def build_evidence_normalizer(
             if not isinstance(summary, str) or not summary:
                 continue
 
+            supports = _matching_hypothesis_ids(hypotheses, record)
+
             # --- candidate: EXACTLY the 9 Evidence fields (extra="forbid" honored) ---
             candidate: dict[str, JsonValue] = {
                 "source_type": source_type,
@@ -273,8 +349,8 @@ def build_evidence_normalizer(
                 "summary": summary,
                 "raw_excerpt": _raw_excerpt(raw),  # NON-NULL citation (AD-6) — derived from raw
                 "confidence": None,  # honest default; DERIVED by reflector 4-3, NOT ENV
-                "supports": [],  # honest empty; filled downstream; NEVER null / NEVER fabricated
-                "contradicts": [],  # honest empty; filled downstream; NEVER null / NEVER fabricated
+                "supports": cast(JsonValue, supports),  # exact-match linkage; unmatched stays honest-empty
+                "contradicts": [],  # honest empty; no deterministic contradiction source yet
             }
 
             # --- PORT gate (AD-9 Pydantic-only-at-port; AC4 no-guess; Constraint 5 never-raise) ---

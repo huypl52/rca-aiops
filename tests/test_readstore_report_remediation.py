@@ -402,7 +402,7 @@ def test_failed_and_success_still_accepted() -> None:
 def test_status_remains_registry_level_spine_unchanged() -> None:
     """AD-9: STATUS_PARTIAL is a registry constant; the 13-key InvestigationState spine is unchanged."""
     assert STATUS_PARTIAL == "partial"
-    assert len(InvestigationState.__annotations__) == 13  # spine UNCHANGED
+    assert len(InvestigationState.__annotations__) == 13  # spine unchanged
     assert "status" not in InvestigationState.__annotations__  # NOT a spine key
     assert "partial" not in InvestigationState.__annotations__  # NOT a spine key
 

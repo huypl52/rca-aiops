@@ -45,11 +45,12 @@ LOCKED MECHANISM (do NOT redesign — defer only CONTENT/numbers):
 
   3. **AD-7 confidence ceiling — DI seam, deterministic default.**
      :data:`ConfidenceAssessor` = ``(evidence) -> float`` in ``[0.0, 1.0]``. The DEFAULT
-     :func:`default_deterministic_confidence_assessor` is PURE/DETERMINISTIC/DERIVED from evidence
-     structure (count-based saturation — no LLM/clock/random/IO; PYTHONHASHSEED-safe). An LLM-enriched
-     assessor may swap in later via this seam WITHOUT rewiring (the POC default keeps the verdict
-     reproducible — AD-12). Never-raise: a raising / non-numeric / out-of-range assessor degrades to the
-     confidence floor (never an exception — Constraint 5).
+     :func:`default_deterministic_confidence_assessor` is PURE/DETERMINISTIC/DERIVED from grounded
+     evidence structure (count-based saturation over evidence items that carry a real hypothesis link and
+     citation backbone — no LLM/clock/random/IO; PYTHONHASHSEED-safe). An LLM-enriched assessor may swap
+     in later via this seam WITHOUT rewiring (the POC default keeps the verdict reproducible — AD-12).
+     Never-raise: a raising / non-numeric / out-of-range assessor degrades to the confidence floor (never
+     an exception — Constraint 5).
 
   4. **D4 / AC4 — no hardcoded threshold.** Every threshold / breakpoint / bound is a MODULE-LEVEL
      CONSTANT (clearly marked "POC default — calibrate Epic-6") referenced BY NAME in the node logic.
@@ -109,7 +110,7 @@ from graph.state import InvestigationState, JsonValue
 _CONFIDENCE_FLOOR: float = 0.0
 #: The AD-7 confidence authority CEILING (clamp upper bound). POC default.
 _CONFIDENCE_CEILING: float = 1.0
-#: Evidence-count saturation point for the default assessor: ``count >= this`` → confidence saturates at
+#: Grounded-evidence saturation point for the default assessor: ``count >= this`` → confidence saturates at
 #: the ceiling. POC default — calibrate Epic-6 (D4).
 _EVIDENCE_SATURATION: int = 4
 #: Write-decision threshold: a floor-Pass ceiling ``>= this`` routes ``write``; below → ``replan``. POC
@@ -149,22 +150,37 @@ def _clamp_confidence(value: float) -> float:
     return value
 
 
+def _is_grounded_evidence(item: Mapping[str, object]) -> bool:
+    """``item`` carries the writer-grade grounding backbone: real excerpt + at least one linked hypothesis.
+
+    The reflector's default ceiling should track evidence that could actually support a root-cause claim,
+    not merely any evidence-shaped dict.
+    """
+    excerpt = item.get("raw_excerpt")
+    if not isinstance(excerpt, str) or not excerpt:
+        return False
+    supports = item.get("supports")
+    if not isinstance(supports, list):
+        return False
+    return any(isinstance(hid, str) and hid for hid in supports)
+
+
 def default_deterministic_confidence_assessor(evidence: Sequence[Mapping[str, object]]) -> float:
-    """DEFAULT confidence ceiling — pure deterministic, DERIVED from evidence structure (AD-12 / AC4).
+    """DEFAULT confidence ceiling — pure deterministic, DERIVED from grounded evidence structure.
 
     Every token is a function of ``evidence`` alone:
-      - the count of evidence items (structural; no field-name hashing → PYTHONHASHSEED-safe);
-      - a saturation term: confidence grows with count until it reaches :data:`_EVIDENCE_SATURATION`
-        items, then saturates at the ceiling (diminishing-returns — more evidence past saturation does
-        not raise confidence beyond the ceiling).
+      - the count of grounded evidence items (real ``raw_excerpt`` + at least one linked hypothesis id);
+      - a saturation term: confidence grows with grounded count until it reaches
+        :data:`_EVIDENCE_SATURATION` items, then saturates at the ceiling (diminishing-returns — more
+        grounded evidence past saturation does not raise confidence beyond the ceiling).
 
     No LLM, no wall-clock, no random, no IO (AD-12). The assessor is ONLY consulted on floor-Pass
     (DEC-3) — it can NEVER override a deterministic floor-Fail. Returned value is clamped to ``[0, 1]``.
     """
-    items = [item for item in evidence if isinstance(item, Mapping)]
-    count = len(items)
+    grounded = [item for item in evidence if isinstance(item, Mapping) and _is_grounded_evidence(item)]
+    count = len(grounded)
     if not count:
-        return _CONFIDENCE_FLOOR  # empty evidence → zero confidence (AD-7 honest; the floor still gates)
+        return _CONFIDENCE_FLOOR  # no grounded evidence → zero confidence (AD-7 honest)
     saturation = min(count, _EVIDENCE_SATURATION) / _EVIDENCE_SATURATION
     return _clamp_confidence(saturation)
 

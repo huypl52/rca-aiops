@@ -37,7 +37,7 @@ LOCKED MECHANISM (do NOT redesign):
      authority > a recomputed estimate).
 
   3. **AD-9 — report is a STATE DICT (set-once).** The report stays a plain JSON-safe ``dict`` on the 13-key
-     spine (key #13 ``report``); there is NO Pydantic ``Report`` model. Pydantic runs ONLY at the port
+     spine (key #14 ``report``); there is NO Pydantic ``Report`` model. Pydantic runs ONLY at the port
      (``models.Evidence`` is validated at ENV 4-2; the writer reads already-validated dicts). The ``report``
      reducer is the default scalar-replace; WRT is terminal (``WRT→END``) so the report is set ONCE.
 

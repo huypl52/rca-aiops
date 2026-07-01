@@ -21,4 +21,11 @@
 # floor content calibrates via the Epic-6 benchmark (D3). DO NOT invent fake rules here.
 ---
 version: 1
-floors: {}
+floors:
+  DependencyTimeout:
+    min_count: 1
+    source_type: prometheus
+    matcher:
+      field: source_name
+      op: label-exact
+      value: order-service

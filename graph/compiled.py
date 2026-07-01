@@ -37,6 +37,7 @@ lazily imports ``tools`` to assemble the real stack (graph→tools FORWARD — L
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Hashable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
@@ -173,6 +174,28 @@ def _promotion_sort_key(hypothesis: Mapping[str, object]) -> tuple[int | float, 
     return (priority, id_str)
 
 
+def _canonical_identity_component(value: object) -> str | None:
+    """Canonical JSON for deterministic plan/tool-call identity comparison; None when unshaped."""
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        return None
+
+
+def _plan_identity(plan: Mapping[str, object]) -> tuple[str, str, str] | None:
+    """Plan identity aligned to EXR/router dedupe shape: ``(tool, query, timestamp_range)``."""
+    tool = plan.get("tool")
+    if not isinstance(tool, str) or not tool:
+        return None
+    identifying = _canonical_identity_component(
+        {key: value for key, value in plan.items() if key not in {"tool", "timestamp_range"}}
+    )
+    timestamp_range = _canonical_identity_component(plan.get("timestamp_range"))
+    if identifying is None or timestamp_range is None:
+        return None
+    return (tool, identifying, timestamp_range)
+
+
 def build_plan_promoting_planner(
     planner: Callable[[InvestigationState], dict[str, JsonValue]],
 ) -> Callable[[InvestigationState], dict[str, JsonValue]]:
@@ -200,7 +223,34 @@ def build_plan_promoting_planner(
         if isinstance(hypotheses, list):
             eligible = [h for h in hypotheses if isinstance(h, Mapping)]
             if eligible:
-                top = min(eligible, key=_promotion_sort_key)
+                executed: set[tuple[str, str, str]] = set()
+                tool_calls = state.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    for record in tool_calls:
+                        if not isinstance(record, Mapping):
+                            continue
+                        tool = record.get("tool")
+                        query = record.get("query")
+                        timestamp_range = record.get("timestamp_range")
+                        if (
+                            isinstance(tool, str)
+                            and tool
+                            and isinstance(query, str)
+                            and query
+                            and isinstance(timestamp_range, str)
+                            and timestamp_range
+                        ):
+                            executed.add((tool, query, timestamp_range))
+
+                ranked = sorted(eligible, key=_promotion_sort_key)
+                top = ranked[0]
+                for hypothesis in ranked:
+                    top_plan = hypothesis.get("plan")
+                    if isinstance(top_plan, Mapping):
+                        identity = _plan_identity(top_plan)
+                        if identity is not None and identity not in executed:
+                            top = hypothesis
+                            break
                 top_plan = top.get("plan")
                 if isinstance(top_plan, dict):
                     out["plan"] = dict(top_plan)
@@ -649,6 +699,7 @@ def build_default_compiled_runner(
     import yaml
 
     from graph.floor_check import build_floor_check, load_floor_registry
+    from graph.hypothesis_sources import build_configured_hypothesis_source
     from graph.nodes.evidence_normalizer import build_evidence_normalizer
     from graph.nodes.executor_router import build_executor_router_node
     from graph.nodes.hypothesis_planner import build_hypothesis_planner
@@ -685,7 +736,9 @@ def build_default_compiled_runner(
     reflector = build_reflector(floor_checker=floor_checker)
 
     hypothesis_planner = build_plan_promoting_planner(
-        build_hypothesis_planner(max_hypotheses=max_hypotheses)
+        build_hypothesis_planner(
+            build_configured_hypothesis_source(), max_hypotheses=max_hypotheses
+        )
     )
     graph = build_compiled_graph(
         incident_context_builder=incident_context_builder,

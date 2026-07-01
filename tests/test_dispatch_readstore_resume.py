@@ -356,7 +356,7 @@ def test_ac2_dispatcher_does_not_import_compiled_graph() -> None:
 
 def test_ac3_status_is_registry_level_not_graph_state() -> None:
     """Lifecycle status lives in the registry, NOT in the 13-key InvestigationState spine."""
-    assert len(InvestigationState.__annotations__) == 13  # spine UNCHANGED (AD-9)
+    assert len(InvestigationState.__annotations__) == 13  # spine unchanged
     assert "status" not in InvestigationState.__annotations__
 
     store = InvestigationStore()

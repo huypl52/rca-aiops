@@ -7,8 +7,8 @@ Covers AC1–AC5 + the leader's DEEP-spotlight attack surface:
   - AC4 reject-on-missing-required — a raw missing source_type / unresolvable source_name / missing
     time_window / missing query → that tool_call's evidence is DROPPED, NEVER guessed/filled. NO
     tool-name→source_type mapping table (source_type is echoed verbatim from raw).
-  - AC5 honesty — raw_excerpt non-null for dispatched records; supports/contradicts == [] (never null);
-    confidence is None.
+  - AC5 honesty — raw_excerpt non-null for dispatched records; supports is exact-match grounded or
+    honestly empty, contradicts == [] (never null); confidence is None.
   - Determinism (AD-12) — same input → byte-identical emitted dicts across calls AND across PYTHONHASHSEED
     (cross-process); order-independent.
   - Constraint 5 never-raise — malformed raw / non-mapping record / a summarizer that raises → drop the
@@ -95,6 +95,7 @@ def _state(
     *,
     service: str | None = "checkout",
     context_window: Mapping[str, object] | None = _INCIDENT_WINDOW,
+    hypotheses: list[dict[str, JsonValue]] | None = None,
 ) -> InvestigationState:
     """A state seeded with tool_calls + context.
 
@@ -110,12 +111,36 @@ def _state(
     if context_window is not None:
         context["time_window"] = context_window
     state["context"] = cast(dict[str, JsonValue], context)
+    if hypotheses is not None:
+        state["hypotheses"] = hypotheses
     return state
 
 
 def _normalize(state: InvestigationState) -> list[dict[str, JsonValue]]:
     out = build_evidence_normalizer()(state)
     return cast(list[dict[str, JsonValue]], out["evidence"])
+
+
+def _hypothesis(
+    hid: str,
+    *,
+    tool: str = "query_prometheus_raw",
+    query: str = 'rate(http_requests_total[5m])',
+    timestamp_range: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    """A hypothesis whose plan can be matched exactly against an EXR tool_call identity."""
+    return {
+        "id": hid,
+        "priority": 1,
+        "plan": {
+            "tool": tool,
+            "query": query,
+            "timestamp_range": timestamp_range
+            if timestamp_range is not None
+            else {"start": "2026-06-24T00:00:00Z", "end": "2026-06-24T01:00:00Z"},
+        },
+        "status": "proposed",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +206,20 @@ def test_source_name_precedence_chain(raw: dict[str, object], expected_source_na
     """
     evidence = _normalize(_state([_record(raw)]))
     assert evidence[0]["source_name"] == expected_source_name
+
+
+def test_exact_matching_hypothesis_plan_populates_supports() -> None:
+    """A hypothesis whose plan exactly matches the EXR identity becomes deterministic support linkage."""
+    evidence = _normalize(_state([_record(_raw())], hypotheses=[_hypothesis("H01")]))
+    assert evidence[0]["supports"] == ["H01"]
+
+
+def test_unmatched_hypothesis_plan_keeps_supports_honestly_empty() -> None:
+    """A non-matching hypothesis must not be guessed into supports."""
+    evidence = _normalize(
+        _state([_record(_raw())], hypotheses=[_hypothesis("H01", query='{"query": "other"}')])
+    )
+    assert evidence[0]["supports"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -366,8 +405,8 @@ def test_raw_excerpt_is_derived_deterministic_serialization_of_raw() -> None:
     )  # same content (excerpt is bounded but full here)
 
 
-def test_supports_contradicts_empty_and_confidence_none() -> None:
-    """AC5: supports/contradicts start [] (never null, never fabricated); confidence None until 4-3."""
+def test_without_matching_hypothesis_supports_stay_empty_and_confidence_none() -> None:
+    """AC5: without an exact plan match, supports stay [] and confidence stays None until 4-3."""
     for ev in _normalize(_state([_record(_raw())])):
         assert ev["supports"] == []
         assert ev["contradicts"] == []
@@ -559,5 +598,5 @@ def test_read_only_no_tools_import() -> None:
 
 
 def test_spine_unchanged_13_keys() -> None:
-    """Scope: InvestigationState spine still EXACTLY 13 keys (ENV adds no spine key; state.py unmodified)."""
+    """Scope: InvestigationState spine still EXACTLY 13 keys (ENV adds no spine key)."""
     assert len(InvestigationState.__annotations__) == 13
