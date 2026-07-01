@@ -40,7 +40,6 @@ What is still not proven:
 
 See:
 - `docs/current-rca-runtime-truth-table.md`
-- `docs/uat/integrated-rca-acceptance-run.md`
 - `docs/integration-readiness-gap-assessment.md`
 - `docs/production-readiness-gap-assessment.md`
 - `docs/operator-runbook.md`
@@ -102,7 +101,6 @@ These remain the primary source documents:
 - `docs/current-rca-runtime-truth-table.md`
 - `docs/integration-readiness-gap-assessment.md`
 - `docs/PROJECT_SPECS.md`
-- `docs/uat/integrated-rca-acceptance-run.md`
 
 Use the bundle for practical onboarding. Use the canonical docs for policy, scope boundaries, and sign-off context.
 

@@ -31,7 +31,6 @@ See also:
 - `docs/current-rca-runtime-truth-table.md`
 - `docs/aiops-integration-standard.md`
 - `docs/aiops-integrated-acceptance-runbook.md`
-- `docs/uat/integrated-rca-acceptance-run.md`
 
 ---
 

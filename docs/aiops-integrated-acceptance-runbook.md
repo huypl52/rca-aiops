@@ -144,6 +144,3 @@ A target is certified only when:
 
 - `docs/aiops-integration-standard.md`
 - `docs/aiops-onboarding-checklist.md`
-- `docs/uat/uat-closeout-bundle.md`
-- `docs/uat/demo-microservice-smoke-status.md`
-- `docs/uat/integrated-rca-acceptance-run.md`

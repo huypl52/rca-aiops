@@ -109,4 +109,3 @@ That second statement is much closer to readiness for integrated acceptance.
 - `docs/integration/alert-payload-mapping.md`
 - `docs/integration/readiness-checklist.md`
 - `docs/current-rca-runtime-truth-table.md`
-- `docs/uat/integrated-rca-acceptance-run.md`

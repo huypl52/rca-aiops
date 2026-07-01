@@ -170,6 +170,3 @@ UAT backend validation and demo smoke validation do **not** certify a target by 
 
 ## 7. References
 
-- `docs/uat/uat-closeout-bundle.md` — UAT closeout context
-- `docs/uat/demo-microservice-smoke-status.md` — demo service smoke status
-- `docs/uat/integrated-rca-acceptance-run.md` — per-target integrated acceptance record

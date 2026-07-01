@@ -55,8 +55,8 @@ Primary source references for this truth table:
 | Sufficiency / reflection | **Deterministic floor + deterministic default ceiling** | `graph/nodes/reflector.py:11-20`, `46-52`, `76-78` | The anti-hallucination gate is real, but not currently powered by a live LLM evaluator. |
 | RCA writing | **Deterministic projection from state/evidence** | `graph/nodes/rca_writer.py:11-15`, `58-64` | Report generation is structured and safe, but not free-form LLM synthesis. |
 | Read-only evidence access | **Implemented and enforced** | `README.md:30-33`, `docs/PROJECT_SPECS.md:243-255` | This is one of the strongest validated parts of the current system. |
-| External LLM API path | **Present for the planner seam; opt-in, provider-gated, and live-validated on the OpenAI-compatible rerun path** | `graph/hypothesis_sources.py`, `docs/uat/integrated-rca-acceptance-run.md` | The system now has a proven provider-backed planner path, but it is still non-default and narrowly validated. |
-| Integrated RCA on live demo stack | **Grounded RCA success proven on the seeded `DependencyTimeout/order-service` demo path** | `docs/uat/integrated-rca-acceptance-run.md`, `docs/uat/uat-closeout-bundle.md` | The alert-driven demo path now reaches `success` with non-empty `root_cause`, non-empty `evidence_backing`, and real citations. Broader target-stack certification is still pending. |
+| External LLM API path | **Present for the planner seam; opt-in and provider-gated** | `graph/hypothesis_sources.py` | The system retains a provider-backed planner seam, but operational validation artifacts are no longer kept in-repo. |
+| Integrated RCA on live demo stack | **Runtime path exists, but repo no longer keeps UAT evidence artifacts** | `graph/compiled.py`, `services/durable.py` | The full investigation path remains part of the design/runtime surface, but this repo no longer keeps UAT proof documents for seeded demo-path outcomes. |
 
 ---
 
@@ -227,47 +227,17 @@ Reference:
 - evidence normalization contract
 - auditability/read-store flow
 
-See UAT docs:
-
-- `docs/uat/uat-coverage-matrix.md`
-- `docs/uat/uat-execution-log.md`
-- `docs/uat/uat-closeout-bundle.md`
+Historical UAT artifacts were removed from this repo, so validation evidence is no longer kept here.
 
 ### Demo microservice smoke
-- demo services reachable
-- gateway/upstream wiring works
-- direct smoke pass on all 5 demo services
-
-See:
-
-- `docs/uat/demo-microservice-smoke-status.md`
+- historical smoke/UAT artifacts removed from repo
 
 ---
 
-## Validated on the seeded demo path (Phase 2, 2026-07-01)
+## Seeded demo-path validation note
 
-### Live integrated RCA on the demo stack
-The env-gated durable rerun on the demo `DependencyTimeout/order-service` path recorded:
-
-- investigation reached terminal `success`
-- `next_action = write`
-- `report != null`
-- `evidence_count = 3`
-- `tool_calls_count = 3`
-- report confidence `{ceiling_confidence: 0.75, categorical: high}`
-- `root_cause`: non-empty, with ranked candidates carrying real citations
-- `evidence_backing`: non-empty, with `raw_excerpt` citations from Prometheus evidence
-
-See:
-
-- `docs/uat/integrated-rca-acceptance-run.md`
-
-Meaning:
-
-- the full graph progresses to a terminal success state on the seeded demo path
-- the sufficiency floor and provider-backed planner seam are both active
-- the LLM planner is live-exercised: Phase 2 evidence shows LLM-generated hypothesis plans that differ from the deterministic fallback
-- the RCA artifact is grounded with real evidence citations, not a thin terminal-success shell
+Historical UAT artifacts for the seeded demo path were removed from this repo.
+Operational/runtime code paths still exist, but proof documents for those runs are no longer checked in.
 
 ### Still not broadly validated
 
