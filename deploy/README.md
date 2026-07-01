@@ -36,9 +36,50 @@ Read-only `get`/`list`/`watch` RBAC (mirroring
 `observability/manifests/00-namespace-rbac.yaml`) is added **with** the 5-A1 real-transport, not
 speculatively before.
 
+## Production hardening (Phase 3, 2026-07-01)
+
+The manifest now includes production-readiness hardening:
+
+### Secret management
+- LLM API key and endpoint URL are stored in a pre-created K8s Secret (`rca-backend-secrets`), not plaintext env vars.
+- `deploy/deploy.sh` now hard-fails if that Secret is missing.
+- The backend manifest no longer ships placeholder Secret values that could overwrite real credentials.
+- For production, use External Secrets Operator or Vault instead of manual Secret creation.
+
+### Durable checkpoint storage
+- A PVC (`rca-checkpoint-pvc`, 1Gi) replaces the ephemeral `/tmp` path.
+- The checkpoint DB is now at `/data/rca-checkpoint.db` and persists across pod restarts.
+- Operators must ensure a storage class is available (or set `storageClassName` in the PVC).
+
+### Security context
+- Container runs as non-root user (UID/GID 1000).
+- `readOnlyRootFilesystem: true` with writable `/tmp` via emptyDir.
+- All Linux capabilities dropped.
+- `allowPrivilegeEscalation: false`.
+- Seccomp profile set to `RuntimeDefault`.
+
+### Health probes
+- Readiness and liveness probes now use `GET /health` (HTTP) instead of TCP-only.
+- The `/health` endpoint returns `{"status": "ok"}` without checking downstream dependencies.
+
+### PodDisruptionBudget
+- A PDB (`rca-backend-pdb`) ensures `minAvailable: 1` during voluntary disruptions.
+
+### Dockerfile hardening
+- Non-root user (`USER 1000:1000`).
+- Structured logging via `LOG_LEVEL` env var.
+- `/data` directory created and owned by the app user.
+
 ## Run (cluster-backed host — this POC dev env has no local K8s)
 
 ```bash
+# 1. Create the Secret with real values (BEFORE deploying)
+kubectl -n rca create secret generic rca-backend-secrets \
+  --from-literal=RCA_HYPOTHESIS_LLM_API_KEY=<your-key> \
+  --from-literal=RCA_HYPOTHESIS_LLM_API_URL=<your-llm-endpoint> \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 2. Deploy
 ./deploy/deploy.sh
 # equivalently:
 docker build -t rca-backend:7.3 -f deploy/Dockerfile .
@@ -50,9 +91,9 @@ kubectl -n rca rollout status deployment/rca-backend
 
 | file | role |
 | --- | --- |
-| `Dockerfile` | `python:3.12-slim` image; runtime deps; `PYTHONPATH=/app`, `PYTHONHASHSEED=42`; `CMD uvicorn routers.app:app` |
-| `k8s/00-rca-backend.yaml` | namespace `rca` + ServiceAccount (no ClusterRole) + Deployment + Service:8000 |
-| `deploy.sh` | build + apply + rollout; prints the honest smoke expected output |
+| `Dockerfile` | `python:3.12-slim` image; non-root user; runtime deps; `PYTHONPATH=/app`, `PYTHONHASHSEED=42`; `CMD uvicorn routers.app:app` |
+| `k8s/00-rca-backend.yaml` | namespace `rca` + ServiceAccount + PVC + Deployment (security context, HTTP probes) + Service:8000 + PDB |
+| `deploy.sh` | build + secret preflight + apply + rollout; prints the honest smoke expected output + production deploy note |
 
 ## Determinism + chaos
 

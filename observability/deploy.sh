@@ -32,7 +32,12 @@ export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 kind export kubeconfig --name "$CLUSTER" --kubeconfig "$KUBECONFIG"
 
 echo ">> applying demo SUT first (the read source — Story 7.1)"
-[[ -f "$REPO/demo/deploy.sh" ]] && bash "$REPO/demo/deploy.sh" || echo "   (demo/deploy.sh absent — apply demo SUT separately)"
+if [[ -f "$REPO/demo/deploy.sh" ]]; then
+  bash "$REPO/demo/deploy.sh"
+else
+  echo "demo/deploy.sh absent — apply demo SUT separately" >&2
+  exit 1
+fi
 
 echo ">> building event-watcher image (observability pkg + kubernetes client)"
 docker build -f "$HERE/Dockerfile.event-watcher" -t "$EVENT_WATCHER_IMAGE" "$REPO"
@@ -49,7 +54,18 @@ done
 echo ">> smoke: Prometheus ready + scraping demo"
 kubectl -n observability port-forward svc/prometheus 19090:9090 &
 PF=$!
+trap 'kill "$PF" 2>/dev/null || true' EXIT
 sleep 3
-curl -fsS "http://127.0.0.1:19090/api/v1/targets?state=active" | grep -q demo || echo "   (demo scrape targets pending — may take one scrape_interval)"
+for attempt in 1 2 3 4 5; do
+  if curl -fsS "http://127.0.0.1:19090/api/v1/targets?state=active" | grep -q demo; then
+    kill "$PF" 2>/dev/null || true
+    trap - EXIT
+    echo ">> observability stack deployed (namespace: observability; reads: demo)"
+    exit 0
+  fi
+  sleep 3
+done
 kill "$PF" 2>/dev/null || true
-echo ">> observability stack deployed (namespace: observability; reads: demo)"
+trap - EXIT
+echo "demo scrape targets did not appear in Prometheus" >&2
+exit 1

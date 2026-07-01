@@ -351,6 +351,7 @@ def test_node_returns_exactly_one_key() -> None:
     )
     result = node(_state())
     assert set(result.keys()) == {"hypotheses"}
+    assert set(_plan_of(_hypotheses_of(result)[0]).keys()) == {"a"}
     for forbidden in (
         "evidence",
         "playbook_hits",
@@ -393,6 +394,30 @@ def test_source_returning_non_list_degrades_to_empty() -> None:
 
     node = build_hypothesis_planner(_bad)
     assert node(_state()) == {"hypotheses": []}
+
+
+def test_non_mapping_descriptors_are_dropped_not_stamped() -> None:
+    """Malformed list items are skipped; only mapping descriptors get deterministic ids."""
+
+    def _mixed(
+        context: Mapping[str, JsonValue],  # noqa: ARG001
+        playbook_hits: Sequence[Mapping[str, JsonValue]],  # noqa: ARG001
+        evidence: Sequence[Mapping[str, JsonValue]],  # noqa: ARG001
+    ) -> list[dict[str, JsonValue]]:
+        return cast(
+            list[dict[str, JsonValue]],
+            [
+                None,
+                {"priority": 2, "plan": {"query": "up"}, "status": "proposed"},
+                "oops",
+            ],
+        )
+
+    node = build_hypothesis_planner(_mixed)
+    hypotheses = _hypotheses_of(node(_state()))
+    assert hypotheses == [
+        {"id": "H01", "priority": 2, "plan": {"query": "up"}, "status": "proposed"}
+    ]
 
 
 def test_missing_state_keys_degrade_without_raising() -> None:
@@ -441,7 +466,7 @@ def test_node_imports_only_graph_and_stdlib_no_tools_port() -> None:
 def test_node_import_roots_subset_future_graph_stdlib() -> None:
     """AD-1: every import root is in {__future__, graph, stdlib} (typing, collections.abc)."""
     tree = ast.parse(NODE_FILE.read_text(encoding="utf-8"))
-    allowed = {"__future__", "graph", "typing", "collections"}
+    allowed = {"__future__", "graph", "typing", "collections", "re"}
     roots: set[str] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
@@ -515,6 +540,36 @@ def test_default_source_derives_one_hypothesis_per_playbook_hit() -> None:
     # The plan references the playbook (non-inventing — forwards the retriever's hit only).
     assert _plan_of(hs[0])["playbook_id"] == "pb-0"
     assert hs[0]["status"] == "proposed"
+    assert set(_plan_of(hs[0]).keys()) == {"playbook_id", "playbook_title"}
+
+
+def test_default_source_prefers_more_supported_playbook_hint() -> None:
+    """Competing hypotheses: the better-supported hint is ranked first and gets H01."""
+    node = build_hypothesis_planner()
+    state = _state(
+        playbook_hits=[
+            {"id": "pb-low", "score": 0.5, "title": "Latency anomaly playbook"},
+            {"id": "pb-high", "score": 0.5, "title": "Timeout mitigation playbook"},
+        ],
+        evidence=[
+            {
+                "source_type": "prometheus",
+                "source_name": "order-service",
+                "query": "up",
+                "timestamp_range": {
+                    "start": "2026-06-30T11:00:00Z",
+                    "end": "2026-06-30T11:05:00Z",
+                },
+                "summary": "timeout spike observed",
+                "raw_excerpt": "timeout spike observed",
+            }
+        ],
+    )
+    hs = _hypotheses_of(node(state))
+    assert [h["id"] for h in hs] == ["H01", "H02"]
+    assert [h["priority"] for h in hs] == [1, 2]
+    assert _plan_of(hs[0])["playbook_id"] == "pb-high"
+    assert _plan_of(hs[1])["playbook_id"] == "pb-low"
 
 
 def test_default_source_ignores_non_mapping_hits() -> None:

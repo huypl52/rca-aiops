@@ -18,10 +18,15 @@
 # Read-only get/list/watch RBAC (mirroring the 7.2 observability ClusterRole) lands with the
 # 5-A1 real-transport — NOT granted speculatively here.
 #
-# HONEST OUTPUT (AC2): POST a trigger -> 202 InvestigationAccepted -> poll
-# /api/investigations/{id} -> status="success" (single-node ContextBuilderRunner), report=None.
-# NO green RCA is manufactured (graph non-convergent until 5-A1; SqliteSaver is 7.4). The deploy
-# proves WIRING, not working RCA.
+# PRODUCTION HARDENING (Phase 3, 2026-07-01):
+# - Secrets: LLM API key moved to a K8s Secret (rca-backend-secrets). No plaintext keys in manifest.
+# - LLM endpoint: uses env var RCA_HYPOTHESIS_LLM_API_URL with no hardcoded IP; operators set it
+#   via the Secret or an additional ConfigMap/overlay. The WSL2 gateway IP is a dev-only default.
+# - Checkpoint storage: PVC (rca-checkpoint-pvc) replaces /tmp ephemeral path. The checkpoint DB
+#   survives pod restarts. Operators must provision storage class or adjust the PVC spec.
+# - Security context: non-root user, readOnlyRootFilesystem, dropped capabilities.
+# - HTTP health endpoint: readiness/liveness probes now hit GET /health instead of TCP-only.
+# - PodDisruptionBudget: ensures availability during voluntary disruptions.
 ---
 apiVersion: v1
 kind: Namespace
@@ -33,9 +38,22 @@ kind: ServiceAccount
 metadata:
   name: rca-backend
   namespace: rca
-  # No ClusterRoleBinding: the backend reads nothing from the cluster today (canned transport).
-  # get/list/watch read-only RBAC (mirroring observability/manifests/00-namespace-rbac.yaml) is
-  # added with the 5-A1 real-transport — not before.
+---
+# PVC for durable checkpoint storage — replaces ephemeral /tmp path.
+# The checkpoint DB persists across pod restarts, enabling cross-restart investigation resume.
+# Adjust storageClassName and size for your environment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rca-checkpoint-pvc
+  namespace: rca
+  labels: { app.kubernetes.io/name: rca-backend }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard  # uncomment and set for non-default storage classes
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,15 +69,60 @@ spec:
       labels: { app.kubernetes.io/name: rca-backend }
     spec:
       serviceAccountName: rca-backend
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: rca-backend
           image: rca-backend:7.3
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8000 }]
-          # TCP-socket probes: the backend has no GET /health (only POST ingest + GET
-          # /api/investigations/{id}); a TCP probe proves the pod is listening on 8000.
-          readinessProbe: { tcpSocket: { port: 8000 }, initialDelaySeconds: 3, periodSeconds: 5 }
-          livenessProbe: { tcpSocket: { port: 8000 }, initialDelaySeconds: 10, periodSeconds: 10 }
-          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+          env:
+            - { name: RCA_CHECKPOINT_DB, value: "/data/rca-checkpoint.db" }
+            - { name: RCA_HYPOTHESIS_LLM_ENABLED, value: "true" }
+            - { name: RCA_HYPOTHESIS_LLM_PROVIDER, value: "openai" }
+            - { name: RCA_HYPOTHESIS_LLM_MODEL, value: "gpt-5.4-mini" }
+            # Sensitive values from Secret
+            - name: RCA_HYPOTHESIS_LLM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: rca-backend-secrets, key: RCA_HYPOTHESIS_LLM_API_KEY }
+            - name: RCA_HYPOTHESIS_LLM_API_URL
+              valueFrom:
+                secretKeyRef: { name: rca-backend-secrets, key: RCA_HYPOTHESIS_LLM_API_URL }
+          ports:
+            - containerPort: 8000
+              name: http
+          # HTTP health probe — the app exposes GET /health (added Phase 3)
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: checkpoint-data, mountPath: /data }
+            # Writable tmp for Python __pycache__ under readOnlyRootFilesystem
+            - { name: tmp-cache, mountPath: /tmp }
+      volumes:
+        - name: checkpoint-data
+          persistentVolumeClaim:
+            claimName: rca-checkpoint-pvc
+        - name: tmp-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -69,3 +132,15 @@ metadata:
 spec:
   selector: { app.kubernetes.io/name: rca-backend }
   ports: [{ name: http, port: 8000, targetPort: 8000 }]
+---
+# PodDisruptionBudget — maintains availability during voluntary disruptions (drains, upgrades).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rca-backend-pdb
+  namespace: rca
+  labels: { app.kubernetes.io/name: rca-backend }
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: rca-backend }

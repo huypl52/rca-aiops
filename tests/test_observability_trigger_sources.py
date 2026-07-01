@@ -35,6 +35,44 @@ def test_prometheus_alert_round_trips_to_valid_incident_trigger() -> None:
     assert trigger.service == "order"
 
 
+def test_alertmanager_envelope_round_trips_to_valid_incident_trigger() -> None:
+    """Alertmanager's native webhook envelope normalizes from its first firing alert."""
+    envelope = {
+        "receiver": "rca-ingest",
+        "status": "firing",
+        "groupLabels": {"alertname": "DependencyTimeout", "service": "order"},
+        "alerts": [
+            {
+                "status": "resolved",
+                "fingerprint": "fp-old",
+                "startsAt": "2026-06-24T09:50:00Z",
+                "endsAt": "2026-06-24T09:55:00Z",
+                "labels": {"alertname": "DependencyTimeout", "service": "order", "severity": "critical"},
+                "annotations": {"summary": "old alert", "description": "old alert"},
+            },
+            {
+                "status": "firing",
+                "fingerprint": "fp-prom-deptimeout",
+                "startsAt": "2026-06-24T10:00:00Z",
+                "endsAt": "2026-06-24T10:05:00Z",
+                "labels": {"alertname": "DependencyTimeout", "service": "order", "severity": "critical"},
+                "annotations": {
+                    "summary": "order dependency timeout",
+                    "description": "payment unreachable",
+                },
+            },
+        ],
+    }
+    trigger = normalize_prometheus(envelope)
+    assert isinstance(trigger, IncidentTrigger)
+    assert trigger.source == TriggerSource.PROMETHEUS_ALERTMANAGER
+    assert trigger.signal_type == SignalType.METRIC
+    assert trigger.canonical_trigger == "DependencyTimeout"
+    assert trigger.service == "order"
+    assert trigger.trigger_id == "fp-prom-deptimeout"
+    assert trigger.raw_payload == envelope
+
+
 def test_grafana_alert_round_trips_to_valid_incident_trigger() -> None:
     """A Grafana Alerting (Loki LogQL) alert (as POSTed to /api/alerts/grafana) -> valid IncidentTrigger."""
     alert = {

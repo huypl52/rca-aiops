@@ -51,6 +51,10 @@ data:
     common:
       path_prefix: /loki
       replication_factor: 1
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore:
+          store: inmemory
     schema_config:
       configs:
         - from: 2024-01-01
@@ -62,6 +66,8 @@ data:
       filesystem: { directory: /loki/chunks }
       tsdb_shipper: { active_index_directory: /loki/tsdb-index, cache_location: /loki/tsdb-cache }
     limits_config: { allow_structured_metadata: true }
+    query_scheduler:
+      max_outstanding_requests_per_tenant: 4096
 ---
 apiVersion: v1
 kind: Service
@@ -83,16 +89,12 @@ data:
     logging { level = "info" }
     discovery.kubernetes "demo_pods" {
       role = "pod"
-      selectors { role = "pod", pod = "demo" }
-    }
-    discovery.relabel "demo_pods" {
-      targets = discovery.kubernetes.demo_pods.targets
-      action  = "keep"
-      regex   = ".*demo\\.rca/service.*"
-      source_labels = ["__meta_kubernetes_pod_label_demo_rca_service"]
+      namespaces {
+        names = ["demo"]
+      }
     }
     loki.source.kubernetes "demo" {
-      targets    = discovery.relabel.demo_pods.output
+      targets    = discovery.kubernetes.demo_pods.targets
       forward_to = [loki.write.default.receiver]
     }
     loki.write "default" {
@@ -115,7 +117,7 @@ spec:
       serviceAccountName: observability-stack
       containers:
         - name: alloy
-          image: grafana/alloy:1.6.0
+          image: grafana/alloy:v1.8.0
           args: [run, /etc/alloy/config.alloy]
           ports: [{ containerPort: 12345 }]
           resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 250m, memory: 256Mi } }

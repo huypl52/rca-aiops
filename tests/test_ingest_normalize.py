@@ -27,6 +27,7 @@ from services.grouping import reset_registry
 from services.normalize import (
     BENCHMARK_CANONICAL_TRIGGERS,
     MissingFieldError,
+    NoFiringAlertError,
     UnknownCanonicalError,
     normalize_grafana,
     normalize_kubernetes,
@@ -71,6 +72,20 @@ PROM_PAYMENT_FAILURE: dict[str, Any] = {
         "description": "payment_failed_total above threshold",
     },
     "startsAt": "2026-06-24T10:00:00Z",
+}
+
+PROM_ENVELOPE_FIRING: dict[str, Any] = {
+    "receiver": "rca-ingest",
+    "status": "firing",
+    "groupLabels": {"alertname": "DependencyTimeout", "service": "order-service"},
+    "alerts": [PROM_DEP_TIMEOUT],
+}
+
+PROM_ENVELOPE_RESOLVED_ONLY: dict[str, Any] = {
+    "receiver": "rca-ingest",
+    "status": "resolved",
+    "groupLabels": {"alertname": "DependencyTimeout", "service": "order-service"},
+    "alerts": [{**PROM_DEP_TIMEOUT, "status": "resolved"}],
 }
 
 GRAFANA_DNS: dict[str, Any] = {
@@ -280,6 +295,25 @@ def test_raw_payload_inline_and_ref_none() -> None:
     trigger = normalize_kubernetes(K8S_CRASHLOOP)
     assert trigger.raw_payload == K8S_CRASHLOOP  # inline, original preserved
     assert trigger.raw_payload_ref is None  # §3.4 row 18, POC
+
+
+def test_alertmanager_envelope_preserves_original_raw_payload() -> None:
+    trigger = normalize_prometheus(PROM_ENVELOPE_FIRING)
+    assert trigger.raw_payload == PROM_ENVELOPE_FIRING
+    assert trigger.raw_payload_ref is None
+
+
+def test_resolved_only_alertmanager_envelope_is_rejected() -> None:
+    with pytest.raises(NoFiringAlertError, match="no firing alert"):
+        normalize_prometheus(PROM_ENVELOPE_RESOLVED_ONLY)
+
+
+def test_resolved_only_alertmanager_envelope_returns_422(client: TestClient) -> None:
+    resp = client.post("/api/alerts/prometheus", json=PROM_ENVELOPE_RESOLVED_ONLY)
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["code"] == "no_firing_alert"
+    assert set(body.keys()) == {"error", "code", "detail"}
 
 
 def test_raw_payload_is_json_safe() -> None:

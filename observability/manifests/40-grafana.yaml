@@ -26,10 +26,11 @@ data:
         url: http://prometheus.observability.svc.cluster.local:9090
         isDefault: true
       - name: Loki
+        uid: loki
         type: loki
         access: proxy
         url: http://loki.observability.svc.cluster.local:3100
-  alerting/contactpoints.yaml: |
+  alerting_contactpoints.yaml: |
     apiVersion: 1
     contactPoints:
       - orgId: 1
@@ -41,7 +42,7 @@ data:
               # Story-1.1 ingest endpoint (source=grafana_alerting_loki). RCA backend = Story 7.3.
               url: http://rca-backend.rca.svc.cluster.local:8000/api/alerts/grafana
               httpMethod: POST
-  alerting/notificationpolicies.yaml: |
+  alerting_notificationpolicies.yaml: |
     apiVersion: 1
     policies:
       - orgId: 1
@@ -50,7 +51,7 @@ data:
         routes:
           - receiver: rca-ingest
   # LogQL alert rules — alertname == §3.7 canonical so normalize_grafana derives it directly.
-  alerting/rules.yaml: |
+  alerting_rules.yaml: |
     apiVersion: 1
     groups:
       - orgId: 1
@@ -104,16 +105,6 @@ spec:
       containers:
         - name: grafana
           image: grafana/grafana:11.3.0
-          env:
-            # 7-2-A1 close-out (Story 7.3 carry-forward): the 7.2 manifest referenced a
-            # `grafana-bootstrap` Secret (secretKeyRef) that no Secret manifest defined — a
-            # dangling ref. For this POC we drop the secretKeyRef entirely and enable
-            # anonymous Admin access instead. ZERO literal secret values are committed; the
-            # alerting webhook (the AC2 part that matters) is configmap-provisioned and fires
-            # regardless of the login. A real deploy would swap these for a real Secret
-            # (RBAC/KMS-backed), never a committed literal.
-            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
-            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Admin" }
           ports: [{ containerPort: 3000 }]
           readinessProbe: { httpGet: { path: /api/health, port: 3000 }, initialDelaySeconds: 10, periodSeconds: 5 }
           resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }
@@ -121,7 +112,17 @@ spec:
             - { name: provisioning, mountPath: /etc/grafana/provisioning, readOnly: true }
       volumes:
         - name: provisioning
-          configMap: { name: grafana-provisioning }
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasources.yaml
+                path: datasources/datasources.yaml
+              - key: alerting_contactpoints.yaml
+                path: alerting/contactpoints.yaml
+              - key: alerting_notificationpolicies.yaml
+                path: alerting/notificationpolicies.yaml
+              - key: alerting_rules.yaml
+                path: alerting/rules.yaml
 ---
 apiVersion: v1
 kind: Service

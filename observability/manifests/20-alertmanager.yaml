@@ -30,7 +30,7 @@ data:
         webhook_configs:
           # Story-1.1 ingest endpoint (source=prometheus_alertmanager). RCA backend = Story 7.3.
           - url: http://rca-backend.rca.svc.cluster.local:8000/api/alerts/prometheus
-            send_resolved: true
+            send_resolved: false
 ---
 apiVersion: apps/v1
 kind: Deployment

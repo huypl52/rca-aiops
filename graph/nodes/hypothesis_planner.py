@@ -53,8 +53,9 @@ imports NO `tools.port`** — it has no adapter call. So `lint-imports` shows th
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Protocol
+from typing import Protocol, cast
 
 from graph.state import InvestigationState, JsonValue
 
@@ -74,6 +75,8 @@ tuned value."""
 _DEFAULT_STATUS: str = "proposed"
 """POC deterministic status for a freshly-planned hypothesis (awaiting `plan_validator` 3.3). The
 status ENUM vocabulary is **DEFERRED**; ``"proposed"`` is a stable, self-describing placeholder."""
+
+_TOKEN_SPLIT = re.compile(r"[^a-zA-Z0-9]+")
 
 
 class HypothesisSource(Protocol):
@@ -99,32 +102,61 @@ class HypothesisSource(Protocol):
 
 
 def _rule_based_source(
-    context: Mapping[str, JsonValue],  # noqa: ARG001 — deterministic; consumed by the real source
+    context: Mapping[str, JsonValue],
     playbook_hits: Sequence[Mapping[str, JsonValue]],
-    evidence: Sequence[Mapping[str, JsonValue]],  # noqa: ARG001 — deterministic; consumed at 4.x/LLM
+    evidence: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:
     """DETERMINISTIC POC default source (AD-12): emit one hypothesis per playbook hint.
 
     Pure function of its inputs — no wall-clock/random/LLM. The playbooks retrieved at preplanning
     (3-1) are CONTEXT HINTS for the planner (FR-3); each playbook hint becomes one candidate
-    hypothesis whose ``plan`` references the playbook. This is the **minimal** rule set — the FULL
-    generator rule content (which `canonical_trigger`/service → which hypotheses) is **DEFERRED**
-    (lock the seam EXISTS as a deterministic pure function; do NOT over-build the rule set).
+    hypothesis whose ``plan`` references the playbook. Candidates are ranked deterministically by
+    the playbook's own score plus a small evidence-overlap scaffold, so the planner begins to compare
+    competing hypotheses instead of treating every hint equally. The FULL generator rule content
+    (which `canonical_trigger`/service → which hypotheses) is still **DEFERRED**.
 
     ``context`` + ``evidence`` are accepted for forward-compatibility (the real LLM source consumes
-    the service + evidence gathered so far) but are intentionally unused here, keeping this default
-    deterministic + minimal. Each descriptor carries ``priority``/``plan``/``status`` and NO ``id``
-    (the node stamps it).
+    the service + evidence gathered so far) and now contribute to the deterministic ranking scaffold.
+    Each descriptor carries ``priority``/``plan``/``status`` and NO ``id`` (the node stamps it).
     """
+    def _tokens(value: object) -> set[str]:
+        if not isinstance(value, str) or not value:
+            return set()
+        return {token for token in _TOKEN_SPLIT.split(value.lower()) if token}
+
+    def _score(hit: Mapping[str, JsonValue]) -> tuple[float, int, str, str]:
+        title = hit.get("title")
+        hint_tokens = _tokens(title) | _tokens(hit.get("id"))
+        evidence_tokens: set[str] = set()
+        service = context.get("service")
+        namespace = context.get("namespace")
+        evidence_tokens |= _tokens(service)
+        evidence_tokens |= _tokens(namespace)
+        for item in evidence:
+            if not isinstance(item, Mapping):
+                continue
+            for field in ("source_name", "source_type", "query", "summary", "raw_excerpt"):
+                evidence_tokens |= _tokens(item.get(field))
+        base_score = hit.get("score")
+        score = float(base_score) if isinstance(base_score, int | float) and not isinstance(base_score, bool) else 0.0
+        support = len(hint_tokens & evidence_tokens)
+        return (
+            score,
+            support,
+            title if isinstance(title, str) else "",
+            hit.get("id") if isinstance(hit.get("id"), str) else "",
+        )
+
+    ranked_hits = [pb for pb in playbook_hits if isinstance(pb, Mapping)]
+    ranked_hits.sort(key=_score, reverse=True)
+
     # Defensive: only Mapping hits with content contribute (non-inventing — we never fabricate a
     # playbook id/title; we only forward what the retriever handed us).
     out: list[dict[str, JsonValue]] = []
-    for pb in playbook_hits:
-        if not isinstance(pb, Mapping):
-            continue
+    for idx, pb in enumerate(ranked_hits, start=1):
         out.append(
             {
-                "priority": _DEFAULT_PRIORITY,
+                "priority": idx,
                 "plan": {
                     "playbook_id": pb.get("id"),
                     "playbook_title": pb.get("title"),
@@ -150,30 +182,95 @@ def _stamp_ids(
     ``JsonValue`` for the node's ``dict[str, JsonValue]`` return (lists are invariant in mypy).
     """
     hypotheses: list[JsonValue] = []
-    for idx, desc in enumerate(descriptors, start=1):
-        if idx > max_hypotheses:
+    for desc in descriptors:
+        if len(hypotheses) >= max_hypotheses:
             break
+        if not isinstance(desc, Mapping):
+            continue
         priority: JsonValue = _DEFAULT_PRIORITY
         plan: dict[str, JsonValue] = {}
         status: JsonValue = _DEFAULT_STATUS
-        if isinstance(desc, Mapping):
-            p = desc.get("priority")
-            if p is not None:
-                priority = p
-            pl = desc.get("plan")
-            if isinstance(pl, Mapping):
-                plan = dict(pl)
-            s = desc.get("status")
-            if isinstance(s, str) and s:
-                status = s
+        p = desc.get("priority")
+        if p is not None:
+            priority = p
+        pl = desc.get("plan")
+        if isinstance(pl, Mapping):
+            plan = dict(pl)
+        s = desc.get("status")
+        if isinstance(s, str) and s:
+            status = s
         item: dict[str, JsonValue] = {
-            "id": f"H{idx:02d}",
+            "id": f"H{len(hypotheses) + 1:02d}",
             "priority": priority,
             "plan": plan,
             "status": status,
         }
         hypotheses.append(item)
     return hypotheses
+
+
+def _comparison_artifact(
+    descriptors: Sequence[Mapping[str, JsonValue]],
+    hypotheses: Sequence[Mapping[str, JsonValue]],
+    *,
+    context: Mapping[str, JsonValue],
+    evidence: Sequence[Mapping[str, JsonValue]],
+) -> dict[str, JsonValue]:
+    """Build the separate comparison artifact for operator/report review.
+
+    The artifact stays outside ``plan`` so executor routing never sees it. It is a
+    deterministic, JSON-safe summary of the ranked candidates: which hypothesis won, and
+    why the runner preferred it over the alternatives.
+    """
+    if not descriptors or not hypotheses:
+        return {}
+
+    def _tokens(value: object) -> set[str]:
+        if not isinstance(value, str) or not value:
+            return set()
+        return {token for token in _TOKEN_SPLIT.split(value.lower()) if token}
+
+    evidence_tokens: set[str] = set()
+    evidence_tokens |= _tokens(context.get("service"))
+    evidence_tokens |= _tokens(context.get("namespace"))
+    for item in evidence:
+        if not isinstance(item, Mapping):
+            continue
+        for field in ("source_name", "source_type", "query", "summary", "raw_excerpt"):
+            evidence_tokens |= _tokens(item.get(field))
+
+    ranked_candidates: list[dict[str, JsonValue]] = []
+    for idx, descriptor in enumerate(descriptors):
+        hypothesis = (
+            hypotheses[idx] if idx < len(hypotheses) and isinstance(hypotheses[idx], Mapping) else {}
+        )
+        plan = descriptor.get("plan")
+        plan_mapping = plan if isinstance(plan, Mapping) else {}
+        title = plan_mapping.get("playbook_title")
+        playbook_id = plan_mapping.get("playbook_id")
+        playbook_tokens = _tokens(title) | _tokens(playbook_id)
+        score = descriptor.get("score")
+        support = len(playbook_tokens & evidence_tokens)
+        ranked_candidates.append(
+            {
+                "hypothesis_id": cast(JsonValue, hypothesis.get("id")),
+                "playbook_id": cast(JsonValue, playbook_id if isinstance(playbook_id, str) else ""),
+                "playbook_title": cast(JsonValue, title if isinstance(title, str) else ""),
+                "score": cast(
+                    JsonValue,
+                    score if isinstance(score, int | float) and not isinstance(score, bool) else 0.0,
+                ),
+                "support": support,
+            }
+        )
+
+    selected = ranked_candidates[0]
+    return {
+        "selected_hypothesis_id": selected["hypothesis_id"],
+        "selected_playbook_id": selected["playbook_id"],
+        "selected_playbook_title": selected["playbook_title"],
+        "ranked_candidates": cast(JsonValue, ranked_candidates),
+    }
 
 
 def build_hypothesis_planner(
@@ -240,7 +337,8 @@ def build_hypothesis_planner(
         if not isinstance(descriptors, list):
             return {"hypotheses": []}
 
-        return {"hypotheses": _stamp_ids(descriptors, max_hypotheses=max_hypotheses)}
+        hypotheses = _stamp_ids(descriptors, max_hypotheses=max_hypotheses)
+        return {"hypotheses": hypotheses}
 
     return hypothesis_planner
 

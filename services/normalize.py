@@ -126,6 +126,12 @@ class UnknownCanonicalError(NormalizeError):
     code = "unknown_canonical_trigger"
 
 
+class NoFiringAlertError(NormalizeError):
+    """Alertmanager envelope contained no firing alert to investigate."""
+
+    code = "no_firing_alert"
+
+
 # ---------------------------------------------------------------------------
 # Extraction helpers. `_req_*` raise MissingFieldError (no guess, no partial);
 # `_opt_*` return a defaulted value when the spec sanctions a default.
@@ -295,19 +301,42 @@ def _build_trigger(
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_alertmanager_envelope(raw: dict[str, Any]) -> dict[str, Any]:
+    """If raw is an Alertmanager webhook envelope, extract the first firing alert.
+
+    Alertmanager sends: {"alerts": [{...}], "status": "firing", ...}
+    Each alert in the list has: fingerprint, startsAt, endsAt, labels, annotations, status.
+    Returns the first alert dict whose status is "firing". Falls through to raw unchanged when
+    there is no "alerts" key. Raises when an envelope exists but contains no firing alert.
+    """
+    alerts = raw.get("alerts")
+    if not isinstance(alerts, list) or not alerts:
+        return raw
+    for alert in alerts:
+        if isinstance(alert, dict) and alert.get("status") == "firing":
+            return alert
+    raise NoFiringAlertError("alertmanager envelope contains no firing alert")
+
+
 def normalize_prometheus(raw: dict[str, Any]) -> IncidentTrigger:
-    """Prometheus Alertmanager alert → IncidentTrigger (source=prometheus_alertmanager)."""
-    labels = _opt_dict(raw, "labels")
-    annotations = _opt_dict(raw, "annotations")
+    """Prometheus Alertmanager alert → IncidentTrigger (source=prometheus_alertmanager).
+
+    Handles both:
+    - a single alert object (direct POST, test harness)
+    - an Alertmanager webhook envelope {"alerts": [...], ...} (real Alertmanager forwarding)
+    """
+    alert = _unwrap_alertmanager_envelope(raw)
+    labels = _opt_dict(alert, "labels")
+    annotations = _opt_dict(alert, "annotations")
     return _build_trigger(
         source=TriggerSource.PROMETHEUS_ALERTMANAGER,
         signal_type=SignalType.METRIC,
-        trigger_id=_req_str(raw, "fingerprint", ctx="prometheus alert"),
+        trigger_id=_req_str(alert, "fingerprint", ctx="prometheus alert"),
         alert_name=_req_str(labels, "alertname", ctx="prometheus labels"),
         severity=_severity(_opt_str(labels, "severity")),
         service=_req_str(labels, "service", ctx="prometheus labels"),
-        started_at=_req_str(raw, "startsAt", ctx="prometheus alert"),
-        ends_at=_opt_str(raw, "endsAt"),
+        started_at=_req_str(alert, "startsAt", ctx="prometheus alert"),
+        ends_at=_opt_str(alert, "endsAt"),
         title=_req_str(annotations, "summary", ctx="prometheus annotations"),
         description=_req_str(annotations, "description", ctx="prometheus annotations"),
         labels=labels,
@@ -367,9 +396,11 @@ def normalize_kubernetes(raw: dict[str, Any]) -> IncidentTrigger:
 __all__ = [
     "BENCHMARK_CANONICAL_TRIGGERS",
     "MissingFieldError",
+    "NoFiringAlertError",
     "NormalizeError",
     "UnknownCanonicalError",
     "normalize_grafana",
     "normalize_kubernetes",
+    "_unwrap_alertmanager_envelope",
     "normalize_prometheus",
 ]
