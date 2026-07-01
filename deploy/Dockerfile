@@ -11,12 +11,18 @@
 #
 # PYTHONHASHSEED=42 — deterministic hash ordering (AD-12 / NFR-Determinism) for the agent
 # process, matching the gate-suite discipline.
+#
+# PRODUCTION HARDENING (Phase 3, 2026-07-01):
+# - Non-root user (appuser:1000) for least-privilege container execution.
+# - Structured JSON logging via env var (LOG_LEVEL + uvicorn access log config).
+# - /data volume mount point for durable checkpoint storage (PVC-backed in K8s).
 FROM python:3.12-slim
 
 ENV PYTHONHASHSEED=42 \
     PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    LOG_LEVEL=INFO
 
 WORKDIR /app
 
@@ -33,7 +39,20 @@ RUN pip install \
       qdrant-client==1.18.0
 
 # Agent packages — the hatch wheel packages minus dev-only eval/ci.
-COPY routers services graph adapters tools models config /app/
+COPY routers/ /app/routers/
+COPY services/ /app/services/
+COPY graph/ /app/graph/
+COPY adapters/ /app/adapters/
+COPY tools/ /app/tools/
+COPY models/ /app/models/
+COPY config/ /app/config/
+COPY ci/ /app/ci/
+
+# Create /data for durable checkpoint storage (PVC mounts here in K8s).
+RUN mkdir -p /data && chown 1000:1000 /data /app
+
+# Non-root user for least-privilege container execution.
+USER 1000:1000
 
 EXPOSE 8000
 
@@ -41,4 +60,6 @@ EXPOSE 8000
 # runs a single node, and returns status="success"/report=None — NO manufactured green RCA
 # (the graph is non-convergent until 5-A1 real-transport; SqliteSaver durability is 7.4). The
 # deploy proves WIRING (Service up, endpoints reachable, graph executes), not working RCA.
-CMD ["uvicorn", "routers.app:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# --log-level from env LOG_LEVEL (default INFO); --access-log enables access logs for ops.
+CMD ["uvicorn", "routers.app:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info", "--access-log"]

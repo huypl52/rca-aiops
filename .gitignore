@@ -43,3 +43,10 @@ checkpoints/*.db
 checkpoints/*.db-journal
 checkpoints/*.sqlite
 checkpoints/*.sqlite-journal
+
+# Local env / generated artifacts
+.env
+_bmad-output/
+plans/
+repomix-output.xml
+release-manifest.json

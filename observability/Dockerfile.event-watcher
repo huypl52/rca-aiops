@@ -1,0 +1,20 @@
+# observability/Dockerfile.event-watcher — the event-watcher image (Story 7.2).
+#
+# Packages the observability/ event_watcher + event_watcher_runner with the kubernetes
+# client (a RUNTIME dependency, not a project build dep) and httpx for forwarding.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=42 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+      "httpx==0.28.1" \
+      "kubernetes==31.0.0"
+
+COPY observability/ ./observability/
+
+CMD ["python", "-m", "observability.event_watcher_runner"]
