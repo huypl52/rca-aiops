@@ -13,8 +13,6 @@ This roadmap is anchored to:
 - `docs/integration/index.md`
 - `docs/production-readiness-gap-assessment.md`
 - `docs/operator-runbook.md`
-- `plans/reports/integration-run-phase2-2026-07-01.md`
-- `plans/reports/integration-run-phase3-2026-07-01.md`
 
 The PRD/story map is the implementation decomposition. This document collapses that detail into five product epics and three delivery waves.
 

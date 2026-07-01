@@ -188,4 +188,3 @@ python3 -m pytest tests/ -k dispatch -v
 - `docs/integration-readiness-gap-assessment.md` — detailed gap analysis
 - `docs/aiops-integrated-acceptance-runbook.md` — per-target acceptance
 - `docs/aiops-onboarding-checklist.md` — target onboarding checklist
-- `plans/reports/` — historical run reports and blocker analysis

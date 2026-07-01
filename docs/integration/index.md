@@ -44,7 +44,6 @@ See:
 - `docs/integration-readiness-gap-assessment.md`
 - `docs/production-readiness-gap-assessment.md`
 - `docs/operator-runbook.md`
-- `plans/reports/integration-run-phase2-2026-07-01.md`
 
 ## Read this bundle in order
 

@@ -261,7 +261,6 @@ The env-gated durable rerun on the demo `DependencyTimeout/order-service` path r
 See:
 
 - `docs/uat/integrated-rca-acceptance-run.md`
-- `plans/reports/integration-run-phase2-2026-07-01.md`
 
 Meaning:
 
