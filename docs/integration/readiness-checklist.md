@@ -109,5 +109,5 @@
 - `docs/integration/observability-contract.md`
 - `docs/integration/alert-payload-mapping.md`
 - `docs/integration/examples.md`
-- `docs/aiops-onboarding-checklist.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/integration/onboarding-checklist.md`
+- `docs/integration/integrated-acceptance-runbook.md`

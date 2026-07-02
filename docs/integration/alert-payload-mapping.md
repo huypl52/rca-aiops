@@ -160,5 +160,5 @@ Unsafe claims:
 - `docs/integration/observability-contract.md`
 - `docs/integration/examples.md`
 - `docs/integration/readiness-checklist.md`
-- `docs/aiops-integration-standard.md`
+- `docs/integration/integration-standard.md`
 - `docs/PROJECT_SPECS.md`

@@ -142,5 +142,5 @@ A target is certified only when:
 
 ## 9. References
 
-- `docs/aiops-integration-standard.md`
-- `docs/aiops-onboarding-checklist.md`
+- `docs/integration/integration-standard.md`
+- `docs/integration/onboarding-checklist.md`

@@ -47,9 +47,83 @@ uv run python ci/gate1_readonly_registry.py   # CI gate #1
 uv run lint-imports     # CI gate #2
 ```
 
+## Local app setup
+
+This repo is a FastAPI backend plus demo/integration tooling.
+
+### 1. Install dependencies
+
+```bash
+uv sync
+```
+
+### 2. Start the backend locally
+
+Use the repo's FastAPI app entrypoint:
+
+```bash
+uv run fastapi dev routers/app.py
+```
+
+If you prefer uvicorn directly:
+
+```bash
+uv run uvicorn routers.app:app --reload
+```
+
+Useful local surfaces after startup:
+- `http://127.0.0.1:8000/health` — health check
+- `http://127.0.0.1:8000/docs` — OpenAPI/Swagger UI
+- `http://127.0.0.1:8000/ui/` — demo UI when `demo/ui/` is present
+
+### 3. Trigger and inspect one investigation
+
+Example local flow:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/alerts/prometheus \
+  -H 'content-type: application/json' \
+  -d '{"fingerprint":"demo-dependency-timeout-001","startsAt":"2026-07-01T10:00:00Z","labels":{"alertname":"DependencyTimeout","service":"order-service","severity":"critical","scenario":"dependency_timeout","namespace":"demo"},"annotations":{"summary":"upstream dependency timing out","description":"order -> payment upstream errors"}}'
+```
+
+Then poll:
+
+```bash
+curl http://127.0.0.1:8000/api/investigations/<investigation_id>
+```
+
+## Demo and environment setup
+
+For the full Kubernetes-backed demo stack, do not duplicate setup steps here — use the curated docs:
+
+- `docs/demo/index.md` — demo doc entrypoint
+- `docs/demo/guide.md` — canonical validated demo truth, run order, GO / NO-GO, fallback policy
+- `docs/demo/operator-cheatsheet.md` — exact demo commands
+- `docs/integration/index.md` — environment bootstrap and integration bundle
+- `docs/integration/environment-bootstrap-runbook.md` — practical deploy/bootstrap order for `demo`, `observability`, and `rca`
+- `docs/operator-runbook.md` — operator deployment guidance
+
+Most useful demo scripts:
+
+- `scripts/demo-preflight.sh` — readiness / GO-NO-GO check
+- `scripts/demo-trigger-prometheus.sh` — direct Prometheus demo trigger
+- `scripts/demo-trigger-grafana.sh` — live Grafana Loki trigger path
+- `scripts/demo-watch-investigation.sh` — poll and summarize one investigation
+
 ## CI invariants (AD-13)
 
 See `ci/GATES.md` for the 6-gate reference. Story 0.1 wires #1 + #2 (HARD-FAIL); #3-6 are placeholders filled by later epics.
+
+## Documentation map
+
+Start with `docs/index.md` for the curated documentation entry point.
+
+Fast paths:
+- `docs/current-rca-runtime-truth-table.md` — what is true in the runtime today
+- `docs/integration/index.md` — onboarding and integrated acceptance bundle
+- `docs/demo/index.md` — demo prep, scripts, and reporting docs
+- `docs/operator-runbook.md` — operator deployment runbook
+- `docs/architecture/index.md` — planning and future-shape docs
 
 ## Status
 

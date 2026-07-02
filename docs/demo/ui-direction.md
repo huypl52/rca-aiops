@@ -96,7 +96,7 @@ Goal: a believable, honest single-pass demo.
 - Timeline from `state_snapshot` (plan/hypotheses/status rich; evidence/reflector honest-empty where stubbed).
 - RCA report rendering for terminal statuses, including graceful `partial`.
 - Chat panel = **one-way narrated bubbles + preset Q&A grounded in `report`/snapshot**. No free-text turns.
-- Trigger buttons wired to the 3 ingest endpoints using scenarios from `docs/demo-script.md` (e.g., `dependency_timeout` on `payment`).
+- Trigger buttons wired to the 3 ingest endpoints using validated scenarios from `docs/demo/guide.md` (for canonical scenario truth) and phrasing from `docs/demo/presenter-script.md` when needed.
 
 **What is allowed to be added to the backend in MVP (small):**
 - A read-only incident-index endpoint (`GET /api/investigations`) listing known ids — purely additive, does not touch graph or read-only boundary.

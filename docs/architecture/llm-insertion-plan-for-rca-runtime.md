@@ -29,8 +29,8 @@ The current runtime is best understood as:
 See also:
 
 - `docs/current-rca-runtime-truth-table.md`
-- `docs/aiops-integration-standard.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/integration/integration-standard.md`
+- `docs/integration/integrated-acceptance-runbook.md`
 
 ---
 
@@ -360,7 +360,7 @@ If only one LLM milestone is funded next, it should be:
 
 ## **LLM-backed hypothesis planner with deterministic fallback**
 
-Use `docs/llm-hypothesis-planner-runtime-profile.md` as the narrow runtime contract for this first seam.
+Use `docs/architecture/llm-hypothesis-planner-runtime-profile.md` as the narrow runtime contract for this first seam.
 
 Why:
 - highest reasoning upside

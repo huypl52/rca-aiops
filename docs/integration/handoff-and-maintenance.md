@@ -185,6 +185,6 @@ python3 -m pytest tests/ -k dispatch -v
 - `docs/integration/execution-checklist.md` — live run checklist
 - `docs/production-readiness-gap-assessment.md` — canonical production-readiness verdict
 - `docs/operator-runbook.md` — canonical operator handoff and deployment runbook
-- `docs/integration-readiness-gap-assessment.md` — detailed gap analysis
-- `docs/aiops-integrated-acceptance-runbook.md` — per-target acceptance
-- `docs/aiops-onboarding-checklist.md` — target onboarding checklist
+- `docs/integration/readiness-gap-assessment.md` — detailed gap analysis
+- `docs/integration/integrated-acceptance-runbook.md` — per-target acceptance
+- `docs/integration/onboarding-checklist.md` — target onboarding checklist

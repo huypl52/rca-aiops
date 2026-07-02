@@ -19,7 +19,7 @@ Use this doc together with:
 - `docs/integration/environment-bootstrap-runbook.md`
 - `docs/integration/observability-contract.md`
 - `docs/integration/readiness-checklist.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/integration/integrated-acceptance-runbook.md`
 
 ## 2. Environment model today
 
@@ -132,7 +132,7 @@ In-cluster LLM planner reachability (resolved in Phase 2, 2026-07-01):
 
 See:
 - `graph/hypothesis_sources.py`
-- `docs/llm-hypothesis-planner-runtime-profile.md`
+- `docs/architecture/llm-hypothesis-planner-runtime-profile.md`
 
 ## 4. Environment variables that matter most
 
@@ -278,13 +278,13 @@ Unsafe claims:
 2. `docs/integration/alert-payload-mapping.md`
 3. `docs/integration/examples.md`
 4. `docs/integration/readiness-checklist.md`
-5. `docs/aiops-integrated-acceptance-runbook.md`
+5. `docs/integration/integrated-acceptance-runbook.md`
 
 ## Cross-references
 
 - `docs/current-rca-runtime-truth-table.md`
-- `docs/integration-readiness-gap-assessment.md`
-- `docs/llm-hypothesis-planner-runtime-profile.md`
+- `docs/integration/readiness-gap-assessment.md`
+- `docs/architecture/llm-hypothesis-planner-runtime-profile.md`
 - `deploy/README.md`
 - `observability/README.md`
 - `demo/README.md`

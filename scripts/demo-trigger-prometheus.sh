@@ -8,7 +8,7 @@
 #
 # Backend URL resolution (first wins): --url/-u flag, else $RCA_BACKEND_URL, else
 # http://localhost:8000 (assumes `kubectl -n rca port-forward deploy/rca-backend 8000:8000`).
-# This dev box has no cluster; run it on the demo host. See docs/demo-operator-cheatsheet.md.
+# This dev box has no cluster; run it on the demo host. See docs/demo/operator-cheatsheet.md.
 set -uo pipefail
 
 # --- color (auto-off when not a TTY) -----------------------------------------
@@ -22,7 +22,8 @@ fi
 # Default backend URL: env override, else localhost (port-forward assumption).
 BACKEND_URL="${RCA_BACKEND_URL:-http://localhost:8000}"
 
-# The validated DependencyTimeout payload (matches docs/demo-operator-cheatsheet.md §8, Mode B).
+# The validated DependencyTimeout payload for the direct Prometheus demo path.
+# See docs/demo/guide.md for canonical path truth and docs/demo/operator-cheatsheet.md for the command-first operator flow.
 read -r -d '' PAYLOAD <<'JSON' || true
 {"fingerprint":"demo-dependency-timeout-001","startsAt":"2026-07-01T10:00:00Z","labels":{"alertname":"DependencyTimeout","service":"order-service","severity":"critical","scenario":"dependency_timeout","namespace":"demo"},"annotations":{"summary":"upstream dependency timing out","description":"order -> payment upstream errors"}}
 JSON

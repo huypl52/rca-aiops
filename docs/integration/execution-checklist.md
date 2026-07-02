@@ -149,5 +149,5 @@ Save these artifacts for the run record:
 - `docs/integration/environment-bootstrap-runbook.md`
 - `docs/integration/observability-contract.md`
 - `docs/integration/readiness-checklist.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/integration/integrated-acceptance-runbook.md`
 - `docs/current-rca-runtime-truth-table.md`

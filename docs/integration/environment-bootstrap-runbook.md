@@ -259,7 +259,7 @@ Minimum practical interpretation:
 
 See:
 - `docs/integration/runtime-and-environment-requirements.md`
-- `docs/llm-hypothesis-planner-runtime-profile.md`
+- `docs/architecture/llm-hypothesis-planner-runtime-profile.md`
 
 ## 10. Environment outcomes to distinguish clearly
 
@@ -292,7 +292,7 @@ This means:
 - `docs/integration/runtime-and-environment-requirements.md`
 - `docs/integration/observability-contract.md`
 - `docs/integration/readiness-checklist.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/integration/integrated-acceptance-runbook.md`
 - `demo/README.md`
 - `observability/README.md`
 - `deploy/README.md`

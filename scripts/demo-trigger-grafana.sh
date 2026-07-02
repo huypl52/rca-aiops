@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/demo-trigger-grafana.sh — drive the validated live Grafana Loki trigger path.
 #
-# Validates demo path B from docs/demo-script.md: a Grafana Loki `DNSFailureLogSpike`
+# Validates the canonical live Grafana Loki path from docs/demo/guide.md: a Grafana Loki `DNSFailureLogSpike`
 # alert for service `user` is fired by REAL log content, ingested by the RCA backend
 # webhook, and (when access logs are on) observed as a backend 202.
 #

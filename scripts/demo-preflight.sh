@@ -12,7 +12,7 @@
 # WARN (non-blocking): supporting SUT services, traffic-runner, and the Grafana/Loki
 # (Mode C) stack are reported but do not fail a Mode B (Prometheus report) run.
 #
-# This dev box has no cluster; run it on the demo host. See docs/demo-operator-cheatsheet.md.
+# This dev box has no cluster; run it on the demo host. See docs/demo/operator-cheatsheet.md for commands and docs/demo/guide.md for policy.
 set -uo pipefail
 
 # --- color (auto-off when not a TTY so logs stay clean) -----------------------

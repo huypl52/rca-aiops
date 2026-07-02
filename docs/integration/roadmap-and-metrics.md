@@ -8,8 +8,8 @@
 
 This roadmap is anchored to:
 - `docs/current-rca-runtime-truth-table.md`
-- `docs/llm-insertion-plan-for-rca-runtime.md`
-- `docs/aiops-integrated-acceptance-runbook.md`
+- `docs/architecture/llm-insertion-plan-for-rca-runtime.md`
+- `docs/integration/integrated-acceptance-runbook.md`
 - `docs/integration/index.md`
 - `docs/production-readiness-gap-assessment.md`
 - `docs/operator-runbook.md`

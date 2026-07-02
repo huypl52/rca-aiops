@@ -96,7 +96,7 @@ Normalization must remain deterministic and must not invent facts.
 See:
 - `models/evidence.py`
 - `graph/nodes/evidence_normalizer.py`
-- `docs/aiops-integration-standard.md`
+- `docs/integration/integration-standard.md`
 
 ### 2.6 Read-only evidence access
 This is one of the strongest current guarantees.
@@ -167,7 +167,7 @@ The following should be documented as desired or recommended, not as already cer
 - engine self-observability as a complete integration contract
 
 See:
-- `docs/integration-readiness-gap-assessment.md`
+- `docs/integration/readiness-gap-assessment.md`
 - `docs/current-rca-runtime-truth-table.md`
 
 ## 5. Floor-rule limitation
@@ -196,7 +196,7 @@ Treat a target stack as contract-ready only when:
 
 ## 7. Cross-references
 
-- `docs/aiops-integration-standard.md`
+- `docs/integration/integration-standard.md`
 - `docs/current-rca-runtime-truth-table.md`
 - `docs/integration/alert-payload-mapping.md`
 - `docs/integration/examples.md`

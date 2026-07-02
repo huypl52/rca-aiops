@@ -88,7 +88,7 @@ The Phase 1 planner seam is acceptable only if all of the following remain true:
 
 ## 7. References
 
-- `docs/llm-insertion-plan-for-rca-runtime.md`
+- `docs/architecture/llm-insertion-plan-for-rca-runtime.md`
 - `docs/current-rca-runtime-truth-table.md`
 - `graph/nodes/hypothesis_planner.py`
 - `graph/compiled.py`
