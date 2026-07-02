@@ -102,6 +102,20 @@ GRAFANA_DNS: dict[str, Any] = {
     "startsAt": "2026-06-24T10:00:00Z",
 }
 
+GRAFANA_ENVELOPE_FIRING: dict[str, Any] = {
+    "receiver": "rca-ingest",
+    "status": "firing",
+    "groupLabels": {"alertname": "DNSFailureLogSpike", "service": "user-service"},
+    "alerts": [GRAFANA_DNS],
+}
+
+GRAFANA_ENVELOPE_RESOLVED_ONLY: dict[str, Any] = {
+    "receiver": "rca-ingest",
+    "status": "resolved",
+    "groupLabels": {"alertname": "DNSFailureLogSpike", "service": "user-service"},
+    "alerts": [{**GRAFANA_DNS, "status": "resolved"}],
+}
+
 K8S_CRASHLOOP: dict[str, Any] = {
     "apiVersion": "events.k8s.io/v1",
     "kind": "Event",
@@ -303,13 +317,32 @@ def test_alertmanager_envelope_preserves_original_raw_payload() -> None:
     assert trigger.raw_payload_ref is None
 
 
+def test_grafana_envelope_preserves_original_raw_payload() -> None:
+    trigger = normalize_grafana(GRAFANA_ENVELOPE_FIRING)
+    assert trigger.raw_payload == GRAFANA_ENVELOPE_FIRING
+    assert trigger.raw_payload_ref is None
+
+
 def test_resolved_only_alertmanager_envelope_is_rejected() -> None:
     with pytest.raises(NoFiringAlertError, match="no firing alert"):
         normalize_prometheus(PROM_ENVELOPE_RESOLVED_ONLY)
 
 
+def test_resolved_only_grafana_envelope_is_rejected() -> None:
+    with pytest.raises(NoFiringAlertError, match="no firing alert"):
+        normalize_grafana(GRAFANA_ENVELOPE_RESOLVED_ONLY)
+
+
 def test_resolved_only_alertmanager_envelope_returns_422(client: TestClient) -> None:
     resp = client.post("/api/alerts/prometheus", json=PROM_ENVELOPE_RESOLVED_ONLY)
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["code"] == "no_firing_alert"
+    assert set(body.keys()) == {"error", "code", "detail"}
+
+
+def test_resolved_only_grafana_envelope_returns_422(client: TestClient) -> None:
+    resp = client.post("/api/alerts/grafana", json=GRAFANA_ENVELOPE_RESOLVED_ONLY)
     assert resp.status_code == 422
     body = resp.json()
     assert body["code"] == "no_firing_alert"

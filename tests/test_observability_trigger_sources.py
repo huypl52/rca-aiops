@@ -11,7 +11,7 @@ with NO ingest-code change). The kubernetes_event source is proven in
 
 from __future__ import annotations
 
-from models import IncidentTrigger, SignalType, TriggerSource
+from models import IncidentTrigger, Severity, SignalType, TriggerSource
 from services.normalize import normalize_grafana, normalize_prometheus
 
 
@@ -98,6 +98,88 @@ def test_grafana_alert_round_trips_to_valid_incident_trigger() -> None:
     assert trigger.signal_type == SignalType.LOG
     assert trigger.canonical_trigger == "DNSFailureLogSpike"
     assert trigger.service == "user"
+
+
+def test_grafana_webhook_envelope_round_trips_to_valid_incident_trigger() -> None:
+    """Grafana's webhook envelope normalizes from its first firing alert."""
+    envelope = {
+        "receiver": "rca-ingest",
+        "status": "firing",
+        "groupLabels": {"alertname": "DNSFailureLogSpike", "service": "user"},
+        "alerts": [
+            {
+                "status": "resolved",
+                "fingerprint": "fp-old",
+                "startsAt": "2026-06-24T09:50:00Z",
+                "endsAt": "2026-06-24T09:55:00Z",
+                "labels": {
+                    "alertname": "DNSFailureLogSpike",
+                    "service": "user",
+                    "severity": "warning",
+                },
+                "annotations": {"summary": "old alert", "description": "old alert"},
+            },
+            {
+                "status": "firing",
+                "fingerprint": "fp-grafana-dns",
+                "startsAt": "2026-06-24T10:00:00Z",
+                "labels": {
+                    "alertname": "DNSFailureLogSpike",
+                    "service": "user",
+                    "severity": "warning",
+                },
+                "annotations": {
+                    "summary": "DNS failure log spike",
+                    "description": "dns+failure log pattern elevated",
+                },
+            },
+        ],
+    }
+    trigger = normalize_grafana(envelope)
+    assert isinstance(trigger, IncidentTrigger)
+    assert trigger.source == TriggerSource.GRAFANA_ALERTING_LOKI
+    assert trigger.signal_type == SignalType.LOG
+    assert trigger.canonical_trigger == "DNSFailureLogSpike"
+    assert trigger.service == "user"
+    assert trigger.trigger_id == "fp-grafana-dns"
+    assert trigger.raw_payload == envelope
+
+
+def test_grafana_webhook_common_fields_fill_sparse_alerts() -> None:
+    """Grafana common/group fields should backfill sparse per-alert payloads."""
+    envelope = {
+        "receiver": "rca-ingest",
+        "status": "firing",
+        "groupLabels": {"alertname": "DNSFailureLogSpike"},
+        "commonLabels": {
+            "service": "user",
+            "severity": "warning",
+            "namespace": "demo",
+            "scenario": "dns_failure",
+        },
+        "commonAnnotations": {
+            "summary": "DNS failure log spike",
+            "description": "dns+failure log pattern elevated",
+        },
+        "alerts": [
+            {
+                "status": "firing",
+                "fingerprint": "fp-grafana-common",
+                "startsAt": "2026-06-24T10:00:00Z",
+                "labels": {},
+                "annotations": {},
+            }
+        ],
+    }
+    trigger = normalize_grafana(envelope)
+    assert isinstance(trigger, IncidentTrigger)
+    assert trigger.canonical_trigger == "DNSFailureLogSpike"
+    assert trigger.service == "user"
+    assert trigger.severity == Severity.WARNING
+    assert trigger.title == "DNS failure log spike"
+    assert trigger.description == "dns+failure log pattern elevated"
+    assert trigger.labels["service"] == "user"
+    assert trigger.annotations["summary"] == "DNS failure log spike"
 
 
 def test_all_three_trigger_sources_map_to_valid_incident_triggers() -> None:

@@ -9,10 +9,13 @@ server (deploy/runtime = Story 1-4 / Epic 7).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from routers.ingest import router as ingest_router
@@ -20,12 +23,22 @@ from routers.investigations import router as investigations_router
 from services.durable import wire_durable_dispatcher_if_configured
 from services.normalize import NormalizeError
 
+# Demo UI static root (repo-relative). Served only when present — additive, optional.
+_DEMO_UI_DIR = Path(__file__).resolve().parent.parent / "demo" / "ui"
+
 
 def create_app() -> FastAPI:
     """Build the FastAPI app: ingest router + read-store router + error-envelope handlers."""
     app = FastAPI(title="RCA AI Agent POC — ingest", version="0.1.0")
     app.include_router(ingest_router)
     app.include_router(investigations_router)
+
+    # Optional same-origin static serving of the demo UI (demo/ui/). Mounted ONLY when
+    # the directory exists, so the app stays importable in environments without it and
+    # the API routers above keep priority. Additive read-only surface (no new routes
+    # beyond the static mount); does not touch ingest/read-store contracts.
+    if _DEMO_UI_DIR.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(_DEMO_UI_DIR), html=True), name="demo-ui")
 
     @app.get("/health")
     async def health() -> dict[str, str]:

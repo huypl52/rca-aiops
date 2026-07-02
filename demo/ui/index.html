@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RCA — Alert-First Incident Console (demo)</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">RCA</span>
+        <span class="brand-title">Alert-First Incident Console</span>
+        <span class="brand-tag">demo · read-only</span>
+      </div>
+      <div class="topbar-status">
+        <span id="conn-state" class="pill pill-muted">connecting…</span>
+        <span id="incident-count" class="pill">0 incidents</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- LEFT: inbox -->
+      <section class="inbox" aria-label="Incident inbox">
+        <div class="panel-head">
+          <h2>Inbox</h2>
+          <span class="hint">newest first · polls read-store</span>
+        </div>
+        <ul id="inbox-list" class="inbox-list"></ul>
+        <p id="inbox-empty" class="empty-state">
+          No incidents yet. Fire a trigger (Prometheus / Grafana / Kubernetes) to open one.
+        </p>
+      </section>
+
+      <!-- CENTER: incident detail + report -->
+      <section class="detail" aria-label="Incident detail">
+        <div id="detail-placeholder" class="empty-state detail-empty">
+          Select an incident from the inbox to see its investigation, timeline, and RCA report.
+        </div>
+        <div id="detail" class="detail-content hidden">
+          <div class="detail-head">
+            <div>
+              <h2 id="d-alert-name" class="detail-title">—</h2>
+              <p id="d-sub" class="detail-sub">—</p>
+            </div>
+            <span id="d-status" class="status-chip">—</span>
+          </div>
+
+          <div class="meta-grid" id="d-meta"></div>
+
+          <div class="progress">
+            <span class="step" data-step="plan">Plan</span>
+            <span class="step" data-step="execute">Execute</span>
+            <span class="step" data-step="reflect">Reflect</span>
+            <span class="step" data-step="report">Report</span>
+          </div>
+
+          <div class="block">
+            <h3>Investigation timeline</h3>
+            <ol id="timeline" class="timeline"></ol>
+            <p id="timeline-empty" class="subtle hidden">No timeline events yet for this run.</p>
+          </div>
+
+          <div class="block">
+            <h3>RCA report</h3>
+            <div id="report" class="report"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT: incident-scoped pseudo-chat -->
+      <section class="chat" aria-label="Incident-scoped chat">
+        <div class="panel-head">
+          <h2>Chat</h2>
+          <span class="hint">incident-scoped · grounded</span>
+        </div>
+        <p id="chat-scope" class="chat-scope subtle">No incident selected.</p>
+        <div id="chat-log" class="chat-log"></div>
+        <div class="presets">
+          <button type="button" class="preset" data-q="what">What happened?</button>
+          <button type="button" class="preset" data-q="cause">Which service looks implicated?</button>
+          <button type="button" class="preset" data-q="confidence">How confident is the result?</button>
+          <button type="button" class="preset" data-q="evidence">What evidence is available?</button>
+        </div>
+        <p class="chat-foot subtle">
+          Answers come only from this incident’s report &amp; state. The agent explains; it never acts.
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
