@@ -7,7 +7,8 @@
 # report-centric demo path; it does NOT wait for the investigation to finish.
 #
 # Backend URL resolution (first wins): --url/-u flag, else $RCA_BACKEND_URL, else
-# http://localhost:8000 (assumes `kubectl -n rca port-forward deploy/rca-backend 8000:8000`).
+# legacy $BACKEND_URL, else http://127.0.0.1:${RCA_BACKEND_PORT:-18000}.
+# The default assumes a replay-owned backend port-forward, not an arbitrary process on localhost:8000.
 # This dev box has no cluster; run it on the demo host. See docs/demo/operator-cheatsheet.md.
 set -uo pipefail
 
@@ -19,8 +20,9 @@ else
   C_GREEN=""; C_RED=""; C_YELLOW=""; C_BOLD=""; C_DIM=""; C_RESET=""
 fi
 
-# Default backend URL: env override, else localhost (port-forward assumption).
-BACKEND_URL="${RCA_BACKEND_URL:-http://localhost:8000}"
+RCA_BACKEND_PORT="${RCA_BACKEND_PORT:-18000}"
+# Default backend URL: canonical env var, legacy fallback, then replay-owned loopback port.
+BACKEND_URL="${RCA_BACKEND_URL:-${BACKEND_URL:-http://127.0.0.1:${RCA_BACKEND_PORT}}}"
 
 # The validated DependencyTimeout payload for the direct Prometheus demo path.
 # See docs/demo/guide.md for canonical path truth and docs/demo/operator-cheatsheet.md for the command-first operator flow.
@@ -36,15 +38,17 @@ Send the validated DependencyTimeout Prometheus alert to the RCA backend and
 print the HTTP result + investigation_id.
 
 Backend URL (first wins):
-  -u, --url URL     e.g. http://localhost:8000
-  \$RCA_BACKEND_URL  environment override
-  (default)         http://localhost:8000
+  -u, --url URL      e.g. http://127.0.0.1:18000
+  \$RCA_BACKEND_URL   canonical environment override
+  \$BACKEND_URL       legacy environment override
+  \$RCA_BACKEND_PORT  local replay port (default 18000)
+  (default)           http://127.0.0.1:18000
 
 Examples:
-  # after: kubectl -n rca port-forward deploy/rca-backend 8000:8000
+  # after: kubectl -n rca port-forward deploy/rca-backend 18000:8000
   scripts/demo-trigger-prometheus.sh
 
-  RCA_BACKEND_URL=http://localhost:8000 scripts/demo-trigger-prometheus.sh
+  RCA_BACKEND_URL=http://127.0.0.1:18000 scripts/demo-trigger-prometheus.sh
   scripts/demo-trigger-prometheus.sh --url http://rca-backend.rca.svc.cluster.local:8000
 
 Exit code:
@@ -77,8 +81,8 @@ rm -f /tmp/rca-trigger-body.$$ /tmp/rca-trigger-err.$$
 
 # Network-level failure (curl could not complete the request).
 if [[ -n "${curl_rc:-}" ]]; then
-  printf '  %s[FAIL]%s curl request failed (rc=%s). Is the port-forward up?\n' "$C_RED" "$C_RESET" "$curl_rc"
-  printf '  %srun:%s kubectl -n rca port-forward deploy/rca-backend 8000:8000\n' "$C_DIM" "$C_RESET"
+  printf '  %s[FAIL]%s curl request failed (rc=%s). Is the backend URL or replay-owned port-forward up?\n' "$C_RED" "$C_RESET" "$curl_rc"
+  printf '  %srun:%s kubectl -n rca port-forward deploy/rca-backend %s:8000\n' "$C_DIM" "$C_RESET" "$RCA_BACKEND_PORT"
   exit 1
 fi
 

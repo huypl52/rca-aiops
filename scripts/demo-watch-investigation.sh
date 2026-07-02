@@ -14,23 +14,27 @@
 #   - remediation is intentionally empty in this POC; the script never invents actions.
 #
 # Prerequisites: curl on PATH; jq recommended, else python3 is used as the JSON parser.
-# Port-forward: kubectl -n rca port-forward deploy/rca-backend 8000:8000
+# Port-forward: kubectl -n rca port-forward deploy/rca-backend 18000:8000
 #
 # Usage:
 #   ./scripts/demo-watch-investigation.sh <investigation_id>
 #   ./scripts/demo-watch-investigation.sh <id> --once        # single fetch, no polling
 #   ./scripts/demo-watch-investigation.sh <id> --poll 2 --timeout 600
-#   BACKEND_URL=http://localhost:8000 ./scripts/demo-watch-investigation.sh <id>
+#   ./scripts/demo-watch-investigation.sh <id> --require-report
+#   RCA_BACKEND_URL=http://127.0.0.1:18000 ./scripts/demo-watch-investigation.sh <id>
 #
-# Env defaults: BACKEND_URL=http://localhost:8000  POLL=3  TIMEOUT=300
+# Env defaults: RCA_BACKEND_PORT=18000  RCA_BACKEND_URL/BACKEND_URL override  POLL=3  TIMEOUT=300
 #
-# Exit codes: 0 = reached a terminal status; 1 = not found, unreachable, or timed out.
+# Exit codes: 0 = reached a terminal status; 1 = not found, unreachable, timed out,
+# or (with --require-report) terminal status without a cited report.
 set -uo pipefail
 
-BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
+RCA_BACKEND_PORT="${RCA_BACKEND_PORT:-18000}"
+BACKEND_URL="${RCA_BACKEND_URL:-${BACKEND_URL:-http://127.0.0.1:${RCA_BACKEND_PORT}}}"
 POLL="${POLL:-3}"
 TIMEOUT="${TIMEOUT:-300}"
 ONCE=0
+REQUIRE_REPORT=0
 ID=""
 
 # --- args -----------------------------------------------------------------------
@@ -44,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --poll)         POLL="${2:?--poll needs seconds}"; shift 2 ;;
     --timeout)      TIMEOUT="${2:?--timeout needs seconds}"; shift 2 ;;
     --backend-url)  BACKEND_URL="${2:?--backend-url needs a url}"; shift 2 ;;
+    --require-report) REQUIRE_REPORT=1; shift ;;
     -*) echo "unknown flag: $1 (try --help)" >&2; exit 1 ;;
     *)
       if [[ -z "$ID" ]]; then ID="$1"; else
@@ -210,6 +215,10 @@ printf '    status           : %s\n' "$final_status"
 if report_is_null "$final_body"; then
   printf '    report           : %snull%s — lifecycle completed, no cited RCA report this run\n' "$C_YELLOW" "$C_OFF"
   echo "    (honest scope: trigger ingestion + lifecycle worked; do not infer a grounded report)"
+  if [[ "$REQUIRE_REPORT" == "1" ]]; then
+    printf '%s  RESULT: terminal lifecycle reached, but report is required for this run.%s\n' "$C_RED$C_BOLD" "$C_OFF"
+    exit 1
+  fi
   case "$final_status" in
     success) printf '%s  RESULT: lifecycle success, report not produced.%s\n' "$C_YELLOW$C_BOLD" "$C_OFF"; exit 0 ;;
     *)       printf '%s  RESULT: ended %s.%s\n' "$C_RED$C_BOLD" "$final_status" "$C_OFF"; exit 1 ;;

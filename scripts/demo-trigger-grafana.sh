@@ -23,7 +23,7 @@
 # Port-forwards (run in separate terminals):
 #   kubectl -n observability port-forward deploy/grafana 3000:3000
 #   kubectl -n observability port-forward deploy/loki    3100:3100
-#   kubectl -n rca          port-forward deploy/rca-backend 8000:8000
+#   kubectl -n rca          port-forward deploy/rca-backend 18000:8000
 #
 # Usage:
 #   ./scripts/demo-trigger-grafana.sh                         # inject + wait + check (defaults)
@@ -35,7 +35,7 @@
 # Env defaults: DEMO_NS=demo  USER_DEPLOY=user  OBS_NS=observability  RCA_NS=rca
 #   RCA_DEPLOY=rca-backend  LOKI_URL=http://localhost:3100
 #   GRAFANA_URL=http://localhost:3000  GRAFANA_USER=admin  GRAFANA_PASSWORD=admin
-#   BACKEND_URL=http://localhost:8000  COUNT=8  WAIT=120  POLL=15
+#   RCA_BACKEND_PORT=18000  RCA_BACKEND_URL/BACKEND_URL override  COUNT=8  WAIT=120  POLL=15
 #
 # Exit codes: 0 = the validated alert signal was observed; 1 = it was not (or a
 # prerequisite failed). Either way a full summary is printed.
@@ -51,7 +51,8 @@ LOKI_URL="${LOKI_URL:-http://localhost:3100}"
 GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
 GRAFANA_USER="${GRAFANA_USER:-admin}"
 GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-admin}"
-BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
+RCA_BACKEND_PORT="${RCA_BACKEND_PORT:-18000}"
+BACKEND_URL="${RCA_BACKEND_URL:-${BACKEND_URL:-http://127.0.0.1:${RCA_BACKEND_PORT}}}"
 COUNT="${COUNT:-8}"          # must exceed the LogQL threshold of 5
 WAIT="${WAIT:-120}"          # seconds to wait for the rule to fire
 POLL="${POLL:-15}"           # seconds between re-checks
@@ -88,6 +89,15 @@ fail()  { printf '  [%sFAIL%s] %s\n' "$C_RED" "$C_OFF" "$*"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+require_uint() {
+  local name="$1" value="$2"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  fail "$name must be an integer (got: $value)"
+  exit 1
+}
+
 # --- pre-flight -----------------------------------------------------------------
 step "pre-flight checks"
 miss=0
@@ -98,10 +108,14 @@ if have jq; then ok "jq on PATH (JSON parsing)"
 else warn "jq missing — falling back to grep (less precise)"; fi
 [[ $miss -eq 1 ]] && { fail "install missing prerequisites first"; exit 1; }
 
+require_uint COUNT "$COUNT"
+require_uint WAIT "$WAIT"
+require_uint POLL "$POLL"
+
 if curl -sf "$BACKEND_URL/health" >/dev/null 2>&1; then
   ok "backend health OK at $BACKEND_URL/health"
 else
-  warn "backend not reachable at $BACKEND_URL (is the port-forward up? checks that need it will degrade)"
+  warn "backend not reachable at $BACKEND_URL (is the replay-owned port-forward or backend URL correct? checks that need it will degrade)"
 fi
 
 # --- signal probes --------------------------------------------------------------
@@ -120,27 +134,28 @@ loki_count_for_user() {
   fi
 }
 
-# Grafana unified alerting: a firing alert instance carries labels + status.state.
+# Grafana unified alerting: query Grafana's embedded alertmanager for active alert instances.
 grafana_alert_firing() {
   local body
   body="$(curl -fsS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" \
-            "$GRAFANA_URL/api/alertmanager/api/v2/alerts" 2>/dev/null)" || return 1
+            "$GRAFANA_URL/api/alertmanager/grafana/api/v2/alerts" 2>/dev/null)" || return 1
   if have jq; then
-    # firing + matching labels. status.state "alerting" == firing.
+    # Grafana 11 returns status.state="active" for firing alert instances.
     printf '%s' "$body" | jq -r '
       .[] | select(.labels.alertname=="DNSFailureLogSpike" and .labels.service=="user")
            | .status.state // "unknown"' 2>/dev/null
   else
     if printf '%s' "$body" | grep -q '"alertname":"DNSFailureLogSpike"'; then
-      printf 'alerting'
+      printf 'active'
     else
       return 1
     fi
   fi
 }
 
-# Backend 202: best-effort grep of the backend access log (often off — honest if absent).
-backend_saw_202() {
+# Backend webhook access log: best-effort only. Access logging may be off, and both
+# 202 (firing) and 422 (resolved-only envelope) can appear across one alert lifecycle.
+backend_webhook_line() {
   local logs
   logs="$(kubectl -n "$RCA_NS" logs "deploy/$RCA_DEPLOY" --tail=500 2>/dev/null)" || return 1
   printf '%s' "$logs" | grep -E 'POST /api/alerts/grafana' | tail -1
@@ -152,11 +167,14 @@ if [[ "$DO_INJECT" == "1" ]]; then
   # Alloy tails the pod's main PID stdout; /proc/1/fd/1 is uvicorn's stdout
   # (PYTHONUNBUFFERED=1 in the image, so lines flush immediately).
   if kubectl -n "$DEMO_NS" exec "deploy/$USER_DEPLOY" -- sh -c '
-       i=0; while [ "$i" -lt '"$COUNT"' ]; do
-         echo "dns resolution failure nxdomain user lookup seq='"$i"' (dns: transient upstream failure)" > /proc/1/fd/1 2>/dev/null || \
-         echo "dns resolution failure nxdomain user lookup seq='"$i"'";
-         i=$((i+1));
-       done' >/dev/null 2>&1; then
+       count="$1"
+       i=0
+       while [ "$i" -lt "$count" ]; do
+         line="dns resolution failure nxdomain user lookup seq=$i (dns: transient upstream failure)"
+         echo "$line" > /proc/1/fd/1 2>/dev/null || echo "$line"
+         i=$((i+1))
+       done
+     ' sh "$COUNT" >/dev/null 2>&1; then
     ok "injected $COUNT lines (namespace=$DEMO_NS service=$USER_DEPLOY)"
     warn "Grafana rule needs Loki ingestion + a 1m hold — it will not fire instantly"
   else
@@ -175,14 +193,14 @@ BACK="";  # backend 202 line
 probe_all() {
   LOGI="$(loki_count_for_user 2>/dev/null || true)"
   STATE="$(grafana_alert_firing 2>/dev/null || true)"
-  BACK="$(backend_saw_202 2>/dev/null || true)"
+  BACK="$(backend_webhook_line 2>/dev/null || true)"
 }
 
 elapsed=0
 probe_all
 while :; do
   # short-circuit once the headline signal (firing alert) is seen.
-  if [[ "$STATE" == "alerting" ]]; then break; fi
+  if [[ "$STATE" == "alerting" || "$STATE" == "active" ]]; then break; fi
   [[ "$ONCE" == "1" ]] && break
   [[ $elapsed -ge $WAIT ]] && break
   sleep "$POLL"; elapsed=$((elapsed + POLL))
@@ -204,7 +222,7 @@ else
   verdict=1
 fi
 
-if [[ "$STATE" == "alerting" ]]; then
+if [[ "$STATE" == "alerting" || "$STATE" == "active" ]]; then
   ok "Grafana firing alert: alertname=DNSFailureLogSpike service=user (state=$STATE)"
 elif [[ -n "$STATE" ]]; then
   warn "Grafana alert exists for DNSFailureLogSpike/service=user but state=$STATE (pending/normal) — re-run --once after the 1m hold"
@@ -215,7 +233,11 @@ else
 fi
 
 if [[ -n "$BACK" ]]; then
-  ok "backend access log shows: $BACK"
+  if printf '%s' "$BACK" | grep -q ' 202 '; then
+    ok "backend access log shows: $BACK"
+  else
+    warn "backend webhook visible but latest observable status is not 202: $BACK"
+  fi
 else
   warn "backend 202 for POST /api/alerts/grafana NOT observable (uvicorn access logging is off by default) — not a failure"
 fi
@@ -223,8 +245,9 @@ fi
 echo
 if [[ $verdict -eq 0 ]]; then
   printf '%s  RESULT: validated live Grafana trigger path OBSERVED.%s\n' "$C_GREEN$C_BOLD" "$C_OFF"
-  echo "  Next: poll the investigation the webhook created with scripts/demo-watch-investigation.sh"
-  echo "  (the backend does not expose a list endpoint; pass the investigation_id the webhook created)."
+  echo "  Next: poll the investigation if you already captured its accepted investigation_id."
+  printf '  RCA_BACKEND_URL=%s scripts/demo-watch-investigation.sh <investigation_id>\n' "$BACKEND_URL"
+  echo "  Honest scope: this script validates the live alert path; investigation follow-through is only deterministic when the id is already known."
 else
   printf '%s  RESULT: validated signals NOT yet observed.%s\n' "$C_YELLOW$C_BOLD" "$C_OFF"
   echo "  This is not proof of breakage — re-run with --once after a minute, or increase --wait."

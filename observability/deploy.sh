@@ -46,6 +46,11 @@ kind load docker-image "$EVENT_WATCHER_IMAGE" --name "$CLUSTER"
 echo ">> applying observability stack manifests"
 kubectl apply -f "$MANIFESTS"
 
+# Grafana alerting contact points/rules are file-provisioned from ConfigMaps and only
+# reloaded reliably on startup. Restart Grafana so provisioning changes actually apply.
+echo ">> restarting Grafana to reload file-provisioned alerting config"
+kubectl -n observability rollout restart deployment/grafana
+
 for d in prometheus alertmanager loki alloy grafana event-watcher; do
   echo ">> rollout status deployment/$d"
   kubectl -n observability rollout status "deployment/$d" --timeout=180s

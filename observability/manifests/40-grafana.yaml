@@ -38,6 +38,7 @@ data:
         receivers:
           - uid: rca-ingest-webhook
             type: webhook
+            disableResolveMessage: true
             settings:
               # Story-1.1 ingest endpoint (source=grafana_alerting_loki). RCA backend = Story 7.3.
               url: http://rca-backend.rca.svc.cluster.local:8000/api/alerts/grafana

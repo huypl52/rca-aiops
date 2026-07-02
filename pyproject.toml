@@ -11,7 +11,7 @@ authors = [{ name = "26-rca-aiops" }]
 dependencies = [
     "langgraph==1.2.6",
     "langgraph-checkpoint-sqlite==3.1.0",
-    "fastapi==0.138.0",
+    "fastapi[standard]==0.138.0",
     "uvicorn==0.49.0",
     "httpx==0.28.1",  # 7.1: declared (was transitive) — the demo microservices' create_app makes live inter-service calls via httpx.
     "pydantic==2.13.4",

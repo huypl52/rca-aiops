@@ -47,9 +47,14 @@ COPY tools/ /app/tools/
 COPY models/ /app/models/
 COPY config/ /app/config/
 COPY ci/ /app/ci/
+COPY demo/ui/ /app/demo/ui/
 
 # Create /data for durable checkpoint storage (PVC mounts here in K8s).
-RUN mkdir -p /data && chown 1000:1000 /data /app
+# The FastAPI app serves /ui only when /app/demo/ui exists, so fail the image build
+# loudly if the static UI bundle is omitted from the deploy artifact.
+RUN test -f /app/demo/ui/index.html \
+ && mkdir -p /data \
+ && chown 1000:1000 /data /app
 
 # Non-root user for least-privilege container execution.
 USER 1000:1000

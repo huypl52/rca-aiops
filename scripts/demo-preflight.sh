@@ -12,7 +12,9 @@
 # WARN (non-blocking): supporting SUT services, traffic-runner, and the Grafana/Loki
 # (Mode C) stack are reported but do not fail a Mode B (Prometheus report) run.
 #
-# This dev box has no cluster; run it on the demo host. See docs/demo/operator-cheatsheet.md for commands and docs/demo/guide.md for policy.
+# This script is for the full cluster-backed demo host. A local FastAPI process on
+# localhost:8000 is not enough; kubectl must reach the demo cluster. See
+# docs/demo/operator-cheatsheet.md for commands and docs/demo/guide.md for policy.
 set -uo pipefail
 
 # --- color (auto-off when not a TTY so logs stay clean) -----------------------
@@ -39,6 +41,8 @@ Read-only; safe to rerun. No arguments needed — just run it on the demo host.
 
 Environment:
   KUBECONFIG     standard kubectl config selection (optional)
+  RCA namespace secret: rca-backend-secrets must exist, or deploy/deploy.sh must be
+                       run with RCA_HYPOTHESIS_LLM_API_KEY + RCA_HYPOTHESIS_LLM_API_URL
 
 Examples:
   scripts/demo-preflight.sh
@@ -64,6 +68,24 @@ if command -v kubectl >/dev/null 2>&1; then
 else
   fail "kubectl not found on PATH (no cluster checks can run)"
   printf '\n%sResult: NO-GO — kubectl is required.%s\n' "$C_RED" "$C_RESET"
+  exit 1
+fi
+
+# --- cluster reachability ----------------------------------------------------
+kube_context="$(kubectl config current-context 2>/dev/null || true)"
+if [[ -n "$kube_context" ]]; then
+  ok "kubectl context: $kube_context"
+else
+  fail "kubectl has no current context"
+  printf '\n%sResult: NO-GO — select a working kube context for the cluster-backed demo.%s\n' "$C_RED" "$C_RESET"
+  exit 1
+fi
+
+if kubectl cluster-info >/dev/null 2>&1; then
+  ok "cluster API reachable from current context"
+else
+  fail "cluster API unreachable from current context"
+  printf '\n%sResult: NO-GO — kubectl cannot reach the cluster API. Fix kube context/auth/network before checking namespaces.%s\n' "$C_RED" "$C_RESET"
   exit 1
 fi
 
@@ -126,8 +148,13 @@ check_deploy observability loki 0
 check_deploy observability alloy 0
 check_deploy observability event-watcher 0
 
-# --- RCA backend (ns rca): service + health ---------------------------------
+# --- RCA backend (ns rca): secret + service + health ------------------------
 printf '\n%s[RCA backend — ns/rca]%s\n' "$C_BOLD" "$C_RESET"
+if kubectl -n rca get secret rca-backend-secrets >/dev/null 2>&1; then
+  ok "secret rca/rca-backend-secrets exists"
+else
+  fail "secret rca/rca-backend-secrets missing"
+fi
 if kubectl -n rca get svc rca-backend >/dev/null 2>&1; then
   ok "service rca/rca-backend exists"
 else
@@ -143,7 +170,7 @@ if kubectl -n rca get deploy rca-backend >/dev/null 2>&1 && deploy_ready rca rca
   if printf '%s' "$health" | grep -q '"ok"'; then
     ok "rca-backend /health -> ${health:-<empty>}"
   else
-    fail "rca-backend /health probe failed (manual: kubectl -n rca port-forward deploy/rca-backend 8000:8000 && curl localhost:8000/health)"
+    fail "rca-backend /health probe failed (manual: kubectl -n rca port-forward deploy/rca-backend 18000:8000 && curl http://127.0.0.1:18000/health)"
   fi
 else
   warn "rca-backend /health skipped (deployment not ready)"
@@ -157,7 +184,9 @@ printf '\n%s=== summary ===%s  %sOK=%d%s  %sWARN=%d%s  %sFAIL=%d%s\n' \
 if [[ "$FAIL" -eq 0 ]]; then
   printf '%sGO — the report-centric Prometheus path is demonstrable.%s\n' "$C_GREEN" "$C_RESET"
   printf '%sNext:%s\n' "$C_DIM" "$C_RESET"
-  printf '  kubectl -n rca port-forward deploy/rca-backend 8000:8000\n'
+  printf '  scripts/demo-mode-b.sh\n'
+  printf '  # manual fallback:\n'
+  printf '  kubectl -n rca port-forward deploy/rca-backend 18000:8000\n'
   printf '  scripts/demo-trigger-prometheus.sh\n'
   exit 0
 else

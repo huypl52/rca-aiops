@@ -51,6 +51,12 @@ uv run lint-imports     # CI gate #2
 
 This repo is a FastAPI backend plus demo/integration tooling.
 
+There are two different ways to run it:
+- **Local backend smoke mode** — start FastAPI on your machine, hit `localhost:8000`, validate ingest/read surfaces quickly
+- **Full Kubernetes-backed demo mode** — use the `demo`, `observability`, and `rca` namespaces plus port-forwards/scripts to validate the real demo environment
+
+A local `202 + investigation_id` proves the backend accepted a request. It does **not** prove the full cluster-backed demo stack is healthy.
+
 ### 1. Install dependencies
 
 ```bash
@@ -78,7 +84,7 @@ Useful local surfaces after startup:
 
 ### 3. Trigger and inspect one investigation
 
-Example local flow:
+Example **local backend smoke** flow:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/alerts/prometheus \
@@ -94,7 +100,24 @@ curl http://127.0.0.1:8000/api/investigations/<investigation_id>
 
 ## Demo and environment setup
 
-For the full Kubernetes-backed demo stack, do not duplicate setup steps here — use the curated docs:
+For the **full Kubernetes-backed demo** stack, the default replay path is:
+
+```bash
+export RCA_HYPOTHESIS_LLM_API_KEY=<your-key>
+export RCA_HYPOTHESIS_LLM_API_URL=<your-llm-endpoint>
+scripts/demo-mode-b.sh
+```
+
+That path owns deploy order, preflight, backend port-forward, trigger, and watch for the validated Prometheus report-centric story.
+
+If you need to debug manually instead:
+- start with `scripts/demo-preflight.sh` to verify kubectl context, cluster reachability, namespaces, and backend health
+- treat `localhost:8000` as ambiguous until you know whether it is a local FastAPI process or a `kubectl port-forward` into `deploy/rca-backend`
+- prefer the replay-owned port-forward target `127.0.0.1:18000` for manual cluster-backed runs
+- the deployed backend should now serve the demo UI directly at `http://127.0.0.1:18000/ui/` after `kubectl -n rca port-forward deploy/rca-backend 18000:8000`
+- do not claim Mode B / Mode C demo readiness from a local backend response alone
+
+Then use the curated docs:
 
 - `docs/demo/index.md` — demo doc entrypoint
 - `docs/demo/guide.md` — canonical validated demo truth, run order, GO / NO-GO, fallback policy
