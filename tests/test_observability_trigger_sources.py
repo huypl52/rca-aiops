@@ -182,6 +182,35 @@ def test_grafana_webhook_common_fields_fill_sparse_alerts() -> None:
     assert trigger.annotations["summary"] == "DNS failure log spike"
 
 
+def test_grafana_dns_trigger_runtime_service_label_user_round_trips() -> None:
+    """The live Grafana DNS demo fixture normalizes to service=user."""
+    envelope = {
+        "receiver": "rca-ingest",
+        "status": "firing",
+        "groupLabels": {"alertname": "DNSFailureLogSpike", "service": "user"},
+        "commonLabels": {
+            "service": "user",
+            "severity": "warning",
+        },
+        "alerts": [
+            {
+                "status": "firing",
+                "fingerprint": "fp-grafana-runtime-service",
+                "startsAt": "2026-06-24T10:00:00Z",
+                "labels": {"service": "user"},
+                "annotations": {
+                    "summary": "DNS failure log spike",
+                    "description": "dns+failure log pattern elevated",
+                },
+            }
+        ],
+    }
+    trigger = normalize_grafana(envelope)
+    assert isinstance(trigger, IncidentTrigger)
+    assert trigger.canonical_trigger == "DNSFailureLogSpike"
+    assert trigger.service == "user"
+
+
 def test_all_three_trigger_sources_map_to_valid_incident_triggers() -> None:
     """Headline AC2 invariant: every one of the 3 trigger sources yields a valid IncidentTrigger."""
     sources_seen: set[str] = set()

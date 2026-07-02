@@ -83,8 +83,15 @@ def query_loki_service_logs(
     service: str,
     time_window: TimeWindow,
     correlation_id: str | None = None,
+    query: str | None = None,
 ) -> RawOutput:
-    """Query Loki logs by service / time window / correlation id (spec §3.6 row 4). Read-only."""
+    """Query Loki logs by service / time window / correlation id (spec §3.6 row 4). Read-only.
+
+    ``query`` is accepted as an inert identifying field so graph-level plans can satisfy the shared
+    ``tool``/``query``/``timestamp_range`` contract without inventing a second Loki-only plan shape.
+    The actual Loki adapter contract remains ``service`` + ``time_window`` + ``correlation_id``.
+    """
+    del query
     return adapter.query_loki(
         service=service,
         time_window=time_window,

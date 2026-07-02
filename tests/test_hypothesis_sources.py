@@ -54,6 +54,35 @@ def sample_inputs() -> tuple[
     return context, playbook_hits, evidence
 
 
+@pytest.fixture()
+def dns_inputs() -> tuple[
+    Mapping[str, JsonValue],
+    Sequence[Mapping[str, JsonValue]],
+    Sequence[Mapping[str, JsonValue]],
+]:
+    context: dict[str, JsonValue] = {
+        "service": "user",
+        "namespace": "demo",
+        "time_window": {"start": "2026-06-30T11:00:00Z", "end": "2026-06-30T11:05:00Z"},
+        "labels": {"severity": "warning", "alertname": "DNSFailureLogSpike"},
+        "topology_seed": {"services": ["user"]},
+    }
+    playbook_hits: list[dict[str, JsonValue]] = [
+        {"id": "pb-dns", "score": 0.88, "title": "DNS failure playbook"},
+    ]
+    evidence: list[dict[str, JsonValue]] = [
+        {
+            "source_type": "loki",
+            "source_name": "user",
+            "query": 'service="user"',
+            "timestamp_range": {"start": "2026-06-30T11:00:00Z", "end": "2026-06-30T11:05:00Z"},
+            "summary": "dns failure log spike",
+            "raw_excerpt": "lookup payment.demo.svc.cluster.local: no such host",
+        },
+    ]
+    return context, playbook_hits, evidence
+
+
 @pytest.mark.parametrize(
     ("provider", "key_env"),
     [("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")],
@@ -294,6 +323,97 @@ def test_non_executable_llm_plan_falls_back_to_prometheus_queries(
         plan = cast(dict[str, JsonValue], item["plan"])
         assert plan["tool"] == "query_prometheus_raw"
         assert plan["timestamp_range"] == context["time_window"]
+
+
+def test_dns_trigger_falls_back_to_loki_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    dns_inputs: tuple[
+        Mapping[str, JsonValue],
+        Sequence[Mapping[str, JsonValue]],
+        Sequence[Mapping[str, JsonValue]],
+    ],
+) -> None:
+    context, playbook_hits, evidence = dns_inputs
+    monkeypatch.setenv("RCA_HYPOTHESIS_LLM_ENABLED", "1")
+    monkeypatch.setenv("RCA_HYPOTHESIS_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    monkeypatch.setenv("OPENAI_API_URL", "http://127.0.0.1:8317")
+
+    def _boom(*args: object, **kwargs: object) -> _FakeResponse:
+        del args, kwargs
+        raise httpx.HTTPError("simulated provider failure")
+
+    monkeypatch.setattr("graph.hypothesis_sources.httpx.post", _boom)
+    source = build_configured_hypothesis_source()
+    result = source(context, playbook_hits, evidence)
+
+    assert len(result) == 1
+    plan = cast(dict[str, JsonValue], result[0]["plan"])
+    assert plan == {
+        "tool": "query_loki_service_logs",
+        "query": 'service="user"',
+        "service": "user",
+        "timestamp_range": context["time_window"],
+    }
+
+
+def test_valid_llm_loki_output_is_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    dns_inputs: tuple[
+        Mapping[str, JsonValue],
+        Sequence[Mapping[str, JsonValue]],
+        Sequence[Mapping[str, JsonValue]],
+    ],
+) -> None:
+    context, playbook_hits, evidence = dns_inputs
+    monkeypatch.setenv("RCA_HYPOTHESIS_LLM_ENABLED", "1")
+    monkeypatch.setenv("RCA_HYPOTHESIS_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    monkeypatch.setenv("OPENAI_API_URL", "http://127.0.0.1:8317")
+
+    payload = [
+        {
+            "priority": 1,
+            "plan": {
+                "tool": "query_loki_service_logs",
+                "query": 'service="user"',
+                "service": "user",
+                "timestamp_range": {
+                    "start": "2026-06-30T11:00:00Z",
+                    "end": "2026-06-30T11:05:00Z",
+                },
+                "correlation_id": "corr-1",
+                "extra": "ignored",
+            },
+            "status": "proposed",
+            "junk": "drop-me",
+        }
+    ]
+
+    def _good_post(*args: object, **kwargs: object) -> _FakeResponse:
+        del args, kwargs
+        return _FakeResponse({"choices": [{"message": {"content": json.dumps(payload)}}]})
+
+    monkeypatch.setattr("graph.hypothesis_sources.httpx.post", _good_post)
+    source = build_configured_hypothesis_source()
+    result = source(context, playbook_hits, evidence)
+
+    assert result == [
+        {
+            "priority": 1,
+            "plan": {
+                "tool": "query_loki_service_logs",
+                "query": 'service="user"',
+                "service": "user",
+                "timestamp_range": {
+                    "start": "2026-06-30T11:00:00Z",
+                    "end": "2026-06-30T11:05:00Z",
+                },
+                "correlation_id": "corr-1",
+            },
+            "status": "proposed",
+        }
+    ]
 
 
 def test_default_compiled_runner_uses_env_gated_llm_source(

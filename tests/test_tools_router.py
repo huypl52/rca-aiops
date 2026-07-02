@@ -242,7 +242,10 @@ def test_dedupe_different_tool_invokes_again() -> None:
 
     r1 = router.dispatch(tool="query_prometheus_raw", query="up", time_window=TIME_WINDOW)
     r2 = router.dispatch(
-        tool="query_loki_service_logs", service="checkout", time_window=TIME_WINDOW
+        tool="query_loki_service_logs",
+        service="checkout",
+        query='service="checkout"',
+        time_window=TIME_WINDOW,
     )
 
     assert adapter.calls == 2

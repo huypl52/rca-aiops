@@ -29,3 +29,10 @@ floors:
       field: source_name
       op: label-exact
       value: order-service
+  DNSFailureLogSpike:
+    min_count: 1
+    source_type: loki
+    matcher:
+      field: source_name
+      op: label-exact
+      value: user

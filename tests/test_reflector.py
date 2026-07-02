@@ -352,6 +352,34 @@ def test_shipped_default_floor_dependency_timeout_demo_path_can_write() -> None:
     assert out["next_action"] == NA_WRITE
 
 
+def test_shipped_default_floor_dns_failure_log_spike_demo_path_can_write() -> None:
+    """The shipped demo floor lets DNSFailureLogSpike/user Loki evidence route past gather_more."""
+    raw = yaml.safe_load(_FLOOR_REGISTRY_YAML.read_text(encoding="utf-8"))
+    assert isinstance(raw, dict)
+    floors = raw.get("floors", {})
+    assert isinstance(floors, dict)
+    checker = build_floor_check(registry=load_floor_registry(floors))
+    node = build_reflector(floor_checker=checker, confidence_assessor=_assessor(0.9))
+    out = node(
+        _state(
+            trigger={"canonical_trigger": "DNSFailureLogSpike"},
+            evidence=[
+                {
+                    "source_type": "loki",
+                    "source_name": "user",
+                    "query": 'service="user"',
+                    "summary": "dns failure log spike",
+                }
+            ],
+        )
+    )
+    suff = cast(dict[str, JsonValue], out["sufficiency"])
+    assert suff["floor_pass"] is True
+    assert suff["matched_count"] == 1
+    assert suff["min_count"] == 1
+    assert out["next_action"] == NA_WRITE
+
+
 def test_canonical_trigger_read_defensively_missing_trigger() -> None:
     """missing/empty trigger → canonical_trigger '' → fail-closed (3.1/3.4 precedent)."""
     node = build_reflector(floor_checker=_REG_CHECKER)
