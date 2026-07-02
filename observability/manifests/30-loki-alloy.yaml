@@ -93,8 +93,19 @@ data:
         names = ["demo"]
       }
     }
+    discovery.relabel "demo_logs" {
+      targets = discovery.kubernetes.demo_pods.targets
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_demo_rca_service"]
+        target_label  = "service"
+      }
+    }
     loki.source.kubernetes "demo" {
-      targets    = discovery.kubernetes.demo_pods.targets
+      targets    = discovery.relabel.demo_logs.output
       forward_to = [loki.write.default.receiver]
     }
     loki.write "default" {

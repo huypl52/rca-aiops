@@ -84,12 +84,88 @@ class InvestigationRecord:
 
 @dataclass
 class InvestigationReadView:
-    """Read-store response projection (AD-10 #3). JSON-safe. Excludes ``trigger``."""
+    """Read-store response projection (AD-10 #3). JSON-safe. Excludes ``trigger``.
+
+    ``trigger_summary`` (demo MVP) is a trigger-derived display projection for the
+    incident-detail header/meta — the SAME source of truth as the inbox list
+    (``_trigger_summary``). It is additive (default empty) and does not change the
+    existing ``status``/``state_snapshot``/``report`` contract. The live runner's
+    ``state_snapshot`` only carries ``{context, next_action, evidence_count,
+    tool_calls_count}``, so trigger context (alert_name, severity, source, service,
+    started_at, namespace, affected_services) is surfaced here rather than read from
+    (absent) top-level snapshot keys.
+    """
 
     investigation_id: str
     status: str
     state_snapshot: dict[str, Any]
     report: dict[str, Any] | None = None
+    trigger_summary: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class InvestigationListItem:
+    """Inbox list projection (read-only). Narrow trigger-derived fields, JSON-safe.
+
+    Story (demo MVP) — the alert-first inbox needs a list of incidents. Fields come
+    from the STORED ``trigger`` (the normalized IncidentTrigger §3.4 dict retained on
+    the record for at-least-once resume), NOT from ``state_snapshot`` — so the inbox
+    never fabricates trigger context. Defensive ``get`` keeps the projection stable
+    even if a stored trigger predates a field (older records).
+    """
+
+    investigation_id: str
+    status: str
+    source: str
+    alert_name: str
+    severity: str
+    service: str
+    canonical_trigger: str
+    title: str
+    started_at: str
+
+
+def _trigger_summary(trigger: dict[str, Any]) -> dict[str, Any]:
+    """Trigger-derived display projection for the demo UI (single source of truth, DRY).
+
+    Returns the trigger fields the inbox row AND the incident-detail header/meta need.
+    Defensive ``get`` + coercion so a missing/None field degrades to ``""`` / ``[]``
+    rather than raising (read-only, never invents). ``affected_services`` is a fresh
+    list so callers never alias the stored trigger.
+    """
+    t = trigger or {}
+    affected = t.get("affected_services")
+    return {
+        "source": str(t.get("source") or ""),
+        "alert_name": str(t.get("alert_name") or ""),
+        "severity": str(t.get("severity") or ""),
+        "service": str(t.get("service") or ""),
+        "canonical_trigger": str(t.get("canonical_trigger") or ""),
+        "title": str(t.get("title") or ""),
+        "started_at": str(t.get("started_at") or ""),
+        "namespace": str(t.get("namespace") or ""),
+        "affected_services": list(affected) if isinstance(affected, list) else [],
+    }
+
+
+def _list_item_from_record(record: InvestigationRecord) -> InvestigationListItem:
+    """Project a stored record into a narrow, JSON-safe inbox item.
+
+    Fields come from ``_trigger_summary`` (the shared trigger projection) so the inbox
+    and the detail header never diverge.
+    """
+    s = _trigger_summary(record.trigger)
+    return InvestigationListItem(
+        investigation_id=record.investigation_id,
+        status=record.status,
+        source=s["source"],
+        alert_name=s["alert_name"],
+        severity=s["severity"],
+        service=s["service"],
+        canonical_trigger=s["canonical_trigger"],
+        title=s["title"],
+        started_at=s["started_at"],
+    )
 
 
 def _strip_remediation(report: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -206,6 +282,22 @@ class InvestigationStore:
         with self._lock:
             return [r for r in self._records.values() if not r.is_terminal]
 
+    def list_items(self) -> list[InvestigationListItem]:
+        """Read-only inbox projection of ALL records, newest-first (demo MVP).
+
+        Deterministic order: primary ``started_at`` DESCENDING (ISO-8601 UTC sorts
+        lexically; empty/missing ``started_at`` sorts LAST), secondary
+        ``investigation_id`` ASCENDING (stable tiebreak). Snapshot under ``_lock`` so
+        concurrent terminal writes cannot race the iteration. Read-only: derives from
+        stored trigger metadata, never mutates, never invents fields.
+        """
+        with self._lock:
+            items = [_list_item_from_record(r) for r in self._records.values()]
+        # Stable two-pass sort: secondary key asc, then primary key desc.
+        items.sort(key=lambda r: r.investigation_id)
+        items.sort(key=lambda r: r.started_at, reverse=True)
+        return items
+
     def view(self, investigation_id: str) -> InvestigationReadView | None:
         """Read-store projection (``None`` → 404 lookup miss). Excludes ``trigger``.
 
@@ -228,6 +320,9 @@ class InvestigationStore:
                 report=_strip_remediation(
                     copy.deepcopy(record.report) if record.report is not None else None
                 ),
+                # Trigger-derived display projection (demo MVP detail header/meta). Fresh
+                # dict/list — never aliases the stored trigger.
+                trigger_summary=_trigger_summary(record.trigger),
             )
 
     def __len__(self) -> int:
@@ -261,6 +356,7 @@ def reset_store() -> None:
 
 
 __all__ = [
+    "InvestigationListItem",
     "InvestigationReadView",
     "InvestigationRecord",
     "InvestigationStore",

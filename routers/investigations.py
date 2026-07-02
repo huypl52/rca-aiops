@@ -42,6 +42,52 @@ class InvestigationReadResponse(BaseModel):
     status: str
     state_snapshot: dict[str, Any]
     report: dict[str, Any] | None = None
+    # Additive (demo MVP): trigger-derived header/meta projection, same source of truth
+    # as the inbox list. Default empty so the contract is backward-compatible.
+    trigger_summary: dict[str, Any] = {}
+
+
+class InvestigationListItemResponse(BaseModel):
+    """One inbox row — narrow trigger-derived fields (demo MVP, read-only)."""
+
+    investigation_id: str
+    status: str
+    source: str
+    alert_name: str
+    severity: str
+    service: str
+    canonical_trigger: str
+    title: str
+    started_at: str
+
+
+class InvestigationListResponse(BaseModel):
+    """`GET /api/investigations` response body — newest-first inbox list (demo MVP)."""
+
+    items: list[InvestigationListItemResponse]
+
+
+@router.get(
+    "/api/investigations",
+    response_model=InvestigationListResponse,
+)
+def list_investigations() -> InvestigationListResponse:
+    """Read-only inbox projection of all investigations, newest-first (demo MVP)."""
+    items = [
+        InvestigationListItemResponse(
+            investigation_id=it.investigation_id,
+            status=it.status,
+            source=it.source,
+            alert_name=it.alert_name,
+            severity=it.severity,
+            service=it.service,
+            canonical_trigger=it.canonical_trigger,
+            title=it.title,
+            started_at=it.started_at,
+        )
+        for it in default_store().list_items()
+    ]
+    return InvestigationListResponse(items=items)
 
 
 @router.get(
@@ -66,7 +112,13 @@ def get_investigation(investigation_id: str) -> InvestigationReadResponse:
         status=view.status,
         state_snapshot=view.state_snapshot,
         report=view.report,
+        trigger_summary=view.trigger_summary,
     )
 
 
-__all__ = ["InvestigationReadResponse", "router"]
+__all__ = [
+    "InvestigationListItemResponse",
+    "InvestigationListResponse",
+    "InvestigationReadResponse",
+    "router",
+]

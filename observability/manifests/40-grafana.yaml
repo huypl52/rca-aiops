@@ -56,6 +56,7 @@ data:
     groups:
       - orgId: 1
         name: rca-demo-log-alerts
+        folder: rca-demo
         interval: 30s
         rules:
           - uid: dns-failure-log-spike
@@ -63,31 +64,36 @@ data:
             condition: A
             data:
               - refId: A
+                queryType: instant
                 relativeTimeRange: { from: 300, to: 0 }
                 datasourceUid: loki
                 model:
                   expr: 'sum by (service) (count_over_time({namespace="demo"} |= "dns" |= "failure" [5m])) > 5'
                   instant: true
+                  queryType: instant
                   refId: A
-            noDataState: NoData
+            noDataState: OK
             execErrState: Error
             for: 1m
             annotations: { summary: "DNS failure log spike", description: "log pattern dns+failure elevated" }
-            labels: { severity: warning, scenario: dns_failure }
+            labels: { alertname: DNSFailureLogSpike, severity: warning, scenario: dns_failure }
           - uid: certificate-error-detected
             title: CertificateErrorDetected
             condition: A
             data:
               - refId: A
+                queryType: instant
                 relativeTimeRange: { from: 300, to: 0 }
                 datasourceUid: loki
                 model:
                   expr: 'sum by (service) (count_over_time({namespace="demo"} |= "certificate" |= "expired" [5m])) > 0'
                   instant: true
+                  queryType: instant
                   refId: A
+            noDataState: OK
             for: 1m
             annotations: { summary: "certificate error detected", description: "log pattern certificate+expired" }
-            labels: { severity: critical, scenario: certificate_expired }
+            labels: { alertname: CertificateErrorDetected, severity: critical, scenario: certificate_expired }
 ---
 apiVersion: apps/v1
 kind: Deployment

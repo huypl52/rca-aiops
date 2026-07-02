@@ -302,12 +302,16 @@ def _build_trigger(
 
 
 def _unwrap_alertmanager_envelope(raw: dict[str, Any]) -> dict[str, Any]:
-    """If raw is an Alertmanager webhook envelope, extract the first firing alert.
+    """If raw is an alert webhook envelope, extract the first firing alert.
 
-    Alertmanager sends: {"alerts": [{...}], "status": "firing", ...}
-    Each alert in the list has: fingerprint, startsAt, endsAt, labels, annotations, status.
-    Returns the first alert dict whose status is "firing". Falls through to raw unchanged when
-    there is no "alerts" key. Raises when an envelope exists but contains no firing alert.
+    Both Alertmanager and Grafana webhook notifications can arrive as an envelope like:
+    {"alerts": [{...}], "status": "firing", ...}
+
+    Each alert entry is expected to carry the canonical per-alert fields we normalize from:
+    fingerprint, startsAt, endsAt, labels, annotations, status.
+
+    Returns the first alert dict whose status is "firing". Falls through to ``raw`` unchanged when
+    there is no ``alerts`` key. Raises when an envelope exists but contains no firing alert.
     """
     alerts = raw.get("alerts")
     if not isinstance(alerts, list) or not alerts:
@@ -315,7 +319,7 @@ def _unwrap_alertmanager_envelope(raw: dict[str, Any]) -> dict[str, Any]:
     for alert in alerts:
         if isinstance(alert, dict) and alert.get("status") == "firing":
             return alert
-    raise NoFiringAlertError("alertmanager envelope contains no firing alert")
+    raise NoFiringAlertError("alert webhook envelope contains no firing alert")
 
 
 def normalize_prometheus(raw: dict[str, Any]) -> IncidentTrigger:
@@ -346,18 +350,36 @@ def normalize_prometheus(raw: dict[str, Any]) -> IncidentTrigger:
 
 
 def normalize_grafana(raw: dict[str, Any]) -> IncidentTrigger:
-    """Grafana Alerting (Loki LogQL) alert → IncidentTrigger (source=grafana_alerting_loki)."""
-    labels = _opt_dict(raw, "labels")
-    annotations = _opt_dict(raw, "annotations")
+    """Grafana Alerting (Loki LogQL) alert → IncidentTrigger (source=grafana_alerting_loki).
+
+    Handles both:
+    - a single alert object (direct POST, test harness)
+    - a webhook envelope {"alerts": [...], ...} (real Grafana forwarding)
+
+    For grouped webhook notifications, Grafana can lift shared metadata to top-level
+    ``groupLabels`` / ``commonLabels`` / ``commonAnnotations`` while leaving each alert
+    entry sparse. We therefore merge top-level common fields with the selected firing
+    alert, letting per-alert fields win when both are present.
+    """
+    alert = _unwrap_alertmanager_envelope(raw)
+    labels = {
+        **_opt_dict(raw, "groupLabels"),
+        **_opt_dict(raw, "commonLabels"),
+        **_opt_dict(alert, "labels"),
+    }
+    annotations = {
+        **_opt_dict(raw, "commonAnnotations"),
+        **_opt_dict(alert, "annotations"),
+    }
     return _build_trigger(
         source=TriggerSource.GRAFANA_ALERTING_LOKI,
         signal_type=SignalType.LOG,
-        trigger_id=_req_str(raw, "fingerprint", ctx="grafana alert"),
+        trigger_id=_req_str(alert, "fingerprint", ctx="grafana alert"),
         alert_name=_req_str(labels, "alertname", ctx="grafana labels"),
         severity=_severity(_opt_str(labels, "severity")),
         service=_req_str(labels, "service", ctx="grafana labels"),
-        started_at=_req_str(raw, "startsAt", ctx="grafana alert"),
-        ends_at=_opt_str(raw, "endsAt"),
+        started_at=_req_str(alert, "startsAt", ctx="grafana alert"),
+        ends_at=_opt_str(alert, "endsAt"),
         title=_req_str(annotations, "summary", ctx="grafana annotations"),
         description=_req_str(annotations, "description", ctx="grafana annotations"),
         labels=labels,
