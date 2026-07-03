@@ -281,7 +281,9 @@ def _dns_loki_fallback(
         return []
 
     labels = _context_labels(context)
-    correlation_id = labels.get("correlation_id") if isinstance(labels.get("correlation_id"), str) else None
+    correlation_id = (
+        labels.get("correlation_id") if isinstance(labels.get("correlation_id"), str) else None
+    )
     return [
         {
             "priority": 1,

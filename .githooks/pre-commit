@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "pre-commit: uv is required to run Ruff formatting" >&2
+  exit 1
+fi
+
+mapfile -t staged_python < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+
+if [[ ${#staged_python[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+echo "pre-commit: formatting staged Python files with Ruff"
+uv run ruff format "${staged_python[@]}"
+git add -- "${staged_python[@]}"

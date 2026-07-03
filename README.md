@@ -39,6 +39,7 @@ Ruff (lint + format) · uv (package/runner + `uv.lock`) · mypy (type-check, `--
 
 ```bash
 uv sync                 # reproducible install from uv.lock
+./scripts/install-git-hooks.sh
 uv run ruff check       # lint
 uv run ruff format --check
 uv run mypy .           # type-check
@@ -46,6 +47,8 @@ uv run pytest           # tests + CI gate self-tests
 uv run python ci/gate1_readonly_registry.py   # CI gate #1
 uv run lint-imports     # CI gate #2
 ```
+
+The repo pre-commit hook formats staged Python files with `uv run ruff format` before each commit and re-stages them automatically.
 
 ## Local app setup
 
@@ -61,6 +64,7 @@ A local `202 + investigation_id` proves the backend accepted a request. It does 
 
 ```bash
 uv sync
+./scripts/install-git-hooks.sh
 ```
 
 ### 2. Start the backend locally
