@@ -178,25 +178,26 @@ def _normalize_descriptors(raw: object) -> list[dict[str, JsonValue]] | None:
         if not isinstance(timestamp_range, Mapping):
             return None
 
+        normalized_descriptor_plan: dict[str, JsonValue] = {
+            "tool": tool,
+            "query": query,
+            "timestamp_range": dict(timestamp_range),
+        }
         normalized_descriptor: dict[str, JsonValue] = {
             "priority": priority,
-            "plan": {
-                "tool": tool,
-                "query": query,
-                "timestamp_range": dict(timestamp_range),
-            },
+            "plan": normalized_descriptor_plan,
             "status": status,
         }
         if tool == _LOKI_TOOL:
             service = normalized_plan.get("service")
             if not isinstance(service, str) or not service.strip():
                 return None
-            normalized_descriptor["plan"]["service"] = service
+            normalized_descriptor_plan["service"] = service
             correlation_id = normalized_plan.get("correlation_id")
             if correlation_id is not None:
                 if not isinstance(correlation_id, str) or not correlation_id.strip():
                     return None
-                normalized_descriptor["plan"]["correlation_id"] = correlation_id
+                normalized_descriptor_plan["correlation_id"] = correlation_id
         descriptors.append(normalized_descriptor)
     return descriptors
 
@@ -281,9 +282,8 @@ def _dns_loki_fallback(
         return []
 
     labels = _context_labels(context)
-    correlation_id = (
-        labels.get("correlation_id") if isinstance(labels.get("correlation_id"), str) else None
-    )
+    raw_correlation_id = labels.get("correlation_id")
+    correlation_id = raw_correlation_id if isinstance(raw_correlation_id, str) else None
     return [
         {
             "priority": 1,
